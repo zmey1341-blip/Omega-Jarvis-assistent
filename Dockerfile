@@ -1,15 +1,13 @@
-# Используем легкий Python
 FROM python:3.10-slim
 
-# Устанавливаем рабочую директорию
 WORKDIR /app
 
-# Копируем зависимости
-COPY requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt
+# Устанавливаем библиотеки напрямую
+RUN pip install --no-cache-dir fastapi uvicorn aiogram python-dotenv httpx
 
-# Копируем весь код
-COPY . .
+# Копируем всё содержимое папки jarvis-omega прямо в рабочую директорию /app
+COPY jarvis-omega/ .
 
-# Запускаем бота и сервер
+# Теперь main.py окажется точно там, где нужно, и запустится без ошибок
 CMD ["python", "main.py"]
+
