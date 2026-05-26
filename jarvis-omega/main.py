@@ -30,13 +30,13 @@ async def main():
 
     pool = WorkerPool(router=router, brain=brain, num_workers=3)
     await pool.start()
-    logger.info("[Main] WorkerPool started.")
+    logger.info("[Main] WorkerPool started with 3 workers.")
 
     bot_task = asyncio.create_task(
         start_bot(brain, pool=pool), name="telegram-bot"
     )
     server_task = asyncio.create_task(
-        start_server(brain), name="tma-server"
+        start_server(brain, pool=pool), name="tma-server"
     )
 
     logger.info("[Main] All services running: bot + TMA server + 3 workers.")

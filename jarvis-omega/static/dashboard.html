@@ -39,11 +39,20 @@
       border-radius: 50%;
       background: #00e676;
       animation: pulse 2s infinite;
+      flex-shrink: 0;
     }
 
     @keyframes pulse {
       0%, 100% { opacity: 1; }
       50% { opacity: 0.4; }
+    }
+
+    .section-title {
+      font-size: 0.65rem;
+      letter-spacing: 2px;
+      text-transform: uppercase;
+      color: #5c8aa8;
+      margin-bottom: 12px;
     }
 
     .grid {
@@ -76,6 +85,7 @@
 
     .card-value.profit { color: #00e676; }
     .card-value.warn { color: #ffb74d; }
+    .card-value.small { font-size: 1.1rem; }
 
     .chart-container {
       background: #0d1821;
@@ -113,11 +123,17 @@
       transition: opacity 0.2s;
     }
 
-    button:active { opacity: 0.7; }
+    button:disabled {
+      opacity: 0.4;
+      cursor: not-allowed;
+    }
+
+    button:not(:disabled):active { opacity: 0.7; }
 
     .btn-pause { background: #d32f2f; color: #fff; }
     .btn-resume { background: #00897b; color: #fff; }
     .btn-refresh { background: #1565c0; color: #fff; grid-column: span 2; }
+    .btn-send { background: #4527a0; color: #fff; }
 
     .provider-tag {
       display: inline-block;
@@ -127,6 +143,122 @@
       background: #0d2d42;
       color: #4fc3f7;
       border: 1px solid #1a4a6a;
+    }
+
+    .task-form {
+      background: #0d1821;
+      border: 1px solid #1a2f45;
+      border-radius: 10px;
+      padding: 16px;
+      margin-bottom: 20px;
+    }
+
+    .task-form textarea {
+      width: 100%;
+      background: #060c12;
+      border: 1px solid #1a2f45;
+      border-radius: 8px;
+      color: #c8e6ff;
+      font-family: inherit;
+      font-size: 0.85rem;
+      padding: 10px 12px;
+      resize: vertical;
+      min-height: 72px;
+      outline: none;
+      margin-bottom: 10px;
+      line-height: 1.5;
+    }
+
+    .task-form textarea:focus {
+      border-color: #4fc3f7;
+    }
+
+    .task-form textarea::placeholder { color: #2a4a5a; }
+
+    .task-form-row {
+      display: flex;
+      gap: 10px;
+      align-items: center;
+    }
+
+    .task-form-row button { flex-shrink: 0; padding: 10px 18px; }
+
+    .queue-badge {
+      font-size: 0.75rem;
+      color: #5c8aa8;
+    }
+
+    .ledger-block {
+      background: #0d1821;
+      border: 1px solid #1a2f45;
+      border-radius: 10px;
+      padding: 16px;
+      margin-bottom: 20px;
+    }
+
+    .ledger-block h2 {
+      font-size: 0.7rem;
+      letter-spacing: 2px;
+      text-transform: uppercase;
+      color: #5c8aa8;
+      margin-bottom: 12px;
+    }
+
+    .ledger-list {
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+    }
+
+    .ledger-item {
+      background: #060c12;
+      border: 1px solid #1a2f45;
+      border-radius: 8px;
+      padding: 10px 12px;
+      font-size: 0.78rem;
+      line-height: 1.6;
+    }
+
+    .ledger-item-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      margin-bottom: 4px;
+    }
+
+    .ledger-provider {
+      display: inline-block;
+      padding: 1px 7px;
+      border-radius: 10px;
+      font-size: 0.68rem;
+      background: #0d2d42;
+      color: #4fc3f7;
+      border: 1px solid #1a4a6a;
+    }
+
+    .ledger-cost { color: #00e676; font-weight: 700; }
+    .ledger-time { color: #5c8aa8; font-size: 0.7rem; }
+
+    .ledger-prompt {
+      color: #a0c8e0;
+      margin-bottom: 2px;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+
+    .ledger-response {
+      color: #607d8b;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+
+    .ledger-empty {
+      color: #2a4a5a;
+      font-size: 0.8rem;
+      text-align: center;
+      padding: 16px 0;
     }
 
     #toast {
@@ -143,6 +275,7 @@
       transition: opacity 0.3s;
       pointer-events: none;
       border: 1px solid #2a5a7a;
+      white-space: nowrap;
     }
   </style>
 </head>
@@ -156,7 +289,7 @@
 <div class="grid">
   <div class="card">
     <div class="card-label">Uptime</div>
-    <div class="card-value" id="uptime">—</div>
+    <div class="card-value small" id="uptime">—</div>
   </div>
   <div class="card">
     <div class="card-label">Provider</div>
@@ -175,40 +308,52 @@
     <div class="card-value" id="requests">—</div>
   </div>
   <div class="card">
-    <div class="card-label">Workers</div>
+    <div class="card-label">Workers / Queue</div>
     <div class="card-value warn" id="workers">—</div>
   </div>
 </div>
 
 <div class="chart-container">
   <h2>Request History</h2>
-  <canvas id="requestChart" height="120"></canvas>
+  <canvas id="requestChart" height="110"></canvas>
 </div>
 
 <div class="chart-container">
   <h2>Profit Over Time</h2>
-  <canvas id="profitChart" height="120"></canvas>
+  <canvas id="profitChart" height="110"></canvas>
 </div>
 
 <div class="actions">
   <button class="btn-pause" onclick="sendCommand('pause')">Pause Workers</button>
   <button class="btn-resume" onclick="sendCommand('resume')">Resume Workers</button>
-  <button class="btn-refresh" onclick="fetchMetrics()">Refresh Metrics</button>
+  <button class="btn-refresh" onclick="refresh()">Refresh</button>
+</div>
+
+<div class="task-form">
+  <div class="section-title">Send Task to Queue</div>
+  <textarea id="taskInput" placeholder="Enter prompt for AI workers..."></textarea>
+  <div class="task-form-row">
+    <button class="btn-send" id="sendBtn" onclick="submitTask()">Send Task</button>
+    <span class="queue-badge">Queue: <span id="queueSize">—</span> pending</span>
+  </div>
+</div>
+
+<div class="ledger-block">
+  <h2>Recent Transactions</h2>
+  <div class="ledger-list" id="ledgerList">
+    <div class="ledger-empty">No transactions yet.</div>
+  </div>
 </div>
 
 <div id="toast"></div>
 
 <script>
   const tg = window.Telegram?.WebApp;
-  if (tg) {
-    tg.ready();
-    tg.expand();
-  }
+  if (tg) { tg.ready(); tg.expand(); }
 
   const BASE = '';
-  const requestHistory = [];
-  const profitHistory = [];
   const timeLabels = [];
+  const profitHistory = [];
 
   const reqCtx = document.getElementById('requestChart').getContext('2d');
   const profCtx = document.getElementById('profitChart').getContext('2d');
@@ -222,17 +367,19 @@
           label: 'Success',
           data: [],
           borderColor: '#00e676',
-          backgroundColor: 'rgba(0,230,118,0.1)',
+          backgroundColor: 'rgba(0,230,118,0.08)',
           tension: 0.4,
           fill: true,
+          pointRadius: 2,
         },
         {
           label: 'Failed',
           data: [],
           borderColor: '#ef5350',
-          backgroundColor: 'rgba(239,83,80,0.1)',
+          backgroundColor: 'rgba(239,83,80,0.08)',
           tension: 0.4,
           fill: true,
+          pointRadius: 2,
         }
       ]
     },
@@ -240,8 +387,8 @@
       responsive: true,
       plugins: { legend: { labels: { color: '#c8e6ff', font: { size: 10 } } } },
       scales: {
-        x: { ticks: { color: '#5c8aa8' }, grid: { color: '#1a2a3a' } },
-        y: { ticks: { color: '#5c8aa8' }, grid: { color: '#1a2a3a' } }
+        x: { ticks: { color: '#5c8aa8', font: { size: 9 } }, grid: { color: '#0f1e2a' } },
+        y: { ticks: { color: '#5c8aa8', font: { size: 9 } }, grid: { color: '#0f1e2a' } }
       }
     }
   });
@@ -253,53 +400,63 @@
       datasets: [{
         label: 'Profit USD',
         data: profitHistory,
-        backgroundColor: 'rgba(79,195,247,0.4)',
+        backgroundColor: 'rgba(79,195,247,0.35)',
         borderColor: '#4fc3f7',
         borderWidth: 1,
+        borderRadius: 3,
       }]
     },
     options: {
       responsive: true,
       plugins: { legend: { labels: { color: '#c8e6ff', font: { size: 10 } } } },
       scales: {
-        x: { ticks: { color: '#5c8aa8' }, grid: { color: '#1a2a3a' } },
-        y: { ticks: { color: '#5c8aa8' }, grid: { color: '#1a2a3a' } }
+        x: { ticks: { color: '#5c8aa8', font: { size: 9 } }, grid: { color: '#0f1e2a' } },
+        y: { ticks: { color: '#5c8aa8', font: { size: 9 } }, grid: { color: '#0f1e2a' } }
       }
     }
   });
 
-  function formatUptime(seconds) {
-    const h = Math.floor(seconds / 3600);
-    const m = Math.floor((seconds % 3600) / 60);
-    const s = Math.floor(seconds % 60);
-    return `${h}h ${m}m ${s}s`;
+  function formatUptime(s) {
+    const h = Math.floor(s / 3600);
+    const m = Math.floor((s % 3600) / 60);
+    const sc = Math.floor(s % 60);
+    return `${h}h ${m}m ${sc}s`;
+  }
+
+  function formatTs(ts) {
+    return new Date(ts * 1000).toLocaleTimeString();
   }
 
   function showToast(msg, ok = true) {
     const el = document.getElementById('toast');
     el.textContent = msg;
     el.style.background = ok ? '#0d2d42' : '#3d0d0d';
+    el.style.borderColor = ok ? '#2a5a7a' : '#7a2a2a';
     el.style.opacity = '1';
-    setTimeout(() => { el.style.opacity = '0'; }, 2500);
+    setTimeout(() => { el.style.opacity = '0'; }, 2800);
   }
 
   async function fetchMetrics() {
     try {
       const res = await fetch(`${BASE}/api/metrics`);
-      if (!res.ok) throw new Error('API error');
+      if (!res.ok) throw new Error();
       const m = await res.json();
 
       document.getElementById('uptime').textContent = formatUptime(m.uptime_seconds);
       document.getElementById('provider').innerHTML = `<span class="provider-tag">${m.active_provider}</span>`;
       document.getElementById('successRate').textContent = `${m.success_rate}%`;
-      document.getElementById('profit').textContent = `$${m.profit_usd.toFixed(2)}`;
+      document.getElementById('profit').textContent = `$${parseFloat(m.profit_usd).toFixed(4)}`;
       document.getElementById('requests').textContent = m.requests_total;
-      document.getElementById('workers').textContent = m.workers_paused ? 'Paused' : 'Running';
-      document.getElementById('workers').style.color = m.workers_paused ? '#ef5350' : '#00e676';
-      document.getElementById('statusDot').style.background = m.workers_paused ? '#ef5350' : '#00e676';
+
+      const paused = m.workers_paused;
+      const qSize = m.queue_size ?? '?';
+      document.getElementById('workers').textContent = paused ? `Paused · ${qSize}` : `Running · ${qSize}`;
+      document.getElementById('workers').style.color = paused ? '#ef5350' : '#00e676';
+      document.getElementById('statusDot').style.background = paused ? '#ef5350' : '#00e676';
+      document.getElementById('queueSize').textContent = qSize;
 
       const label = new Date().toLocaleTimeString();
-      if (timeLabels.length > 10) {
+      if (timeLabels.length >= 12) {
         timeLabels.shift();
         requestChart.data.datasets[0].data.shift();
         requestChart.data.datasets[1].data.shift();
@@ -308,12 +465,47 @@
       timeLabels.push(label);
       requestChart.data.datasets[0].data.push(m.requests_success);
       requestChart.data.datasets[1].data.push(m.requests_failed);
-      profitHistory.push(m.profit_usd);
-      requestChart.update();
-      profitChart.update();
-    } catch (e) {
+      profitHistory.push(parseFloat(m.profit_usd));
+      requestChart.update('none');
+      profitChart.update('none');
+    } catch {
       showToast('Failed to fetch metrics', false);
     }
+  }
+
+  async function fetchLedger() {
+    try {
+      const res = await fetch(`${BASE}/api/ledger?limit=10`);
+      if (!res.ok) return;
+      const data = await res.json();
+      const txns = (data.transactions || []).slice().reverse();
+      const list = document.getElementById('ledgerList');
+
+      if (txns.length === 0) {
+        list.innerHTML = '<div class="ledger-empty">No transactions yet.</div>';
+        return;
+      }
+
+      list.innerHTML = txns.map(t => `
+        <div class="ledger-item">
+          <div class="ledger-item-header">
+            <span class="ledger-provider">${t.provider}</span>
+            <span class="ledger-cost">+$${parseFloat(t.cost_usd).toFixed(6)}</span>
+            <span class="ledger-time">${formatTs(t.ts)} · ${t.elapsed_sec}s</span>
+          </div>
+          <div class="ledger-prompt">▶ ${escHtml(t.prompt_snippet)}</div>
+          <div class="ledger-response">◀ ${escHtml(t.response_snippet)}</div>
+        </div>
+      `).join('');
+    } catch {
+    }
+  }
+
+  function escHtml(s) {
+    return String(s)
+      .replace(/&/g, '&amp;')
+      .replace(/</g, '&lt;')
+      .replace(/>/g, '&gt;');
   }
 
   async function sendCommand(cmd) {
@@ -321,18 +513,56 @@
       const res = await fetch(`${BASE}/api/command`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ command: cmd })
+        body: JSON.stringify({ command: cmd }),
       });
       const data = await res.json();
-      showToast(data.message || 'Command sent', res.ok);
+      showToast(data.message || 'Done', res.ok);
       if (res.ok) fetchMetrics();
-    } catch (e) {
+    } catch {
       showToast('Command failed', false);
     }
   }
 
-  fetchMetrics();
-  setInterval(fetchMetrics, 10000);
+  async function submitTask() {
+    const input = document.getElementById('taskInput');
+    const btn = document.getElementById('sendBtn');
+    const prompt = input.value.trim();
+    if (!prompt) { showToast('Enter a prompt first', false); return; }
+
+    btn.disabled = true;
+    btn.textContent = 'Sending...';
+    try {
+      const res = await fetch(`${BASE}/api/task`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ prompt }),
+      });
+      const data = await res.json();
+      if (res.ok) {
+        showToast(`Task queued. Queue: ${data.queue_size}`);
+        input.value = '';
+        document.getElementById('queueSize').textContent = data.queue_size;
+      } else {
+        showToast(data.detail || 'Failed to queue task', false);
+      }
+    } catch {
+      showToast('Network error', false);
+    } finally {
+      btn.disabled = false;
+      btn.textContent = 'Send Task';
+    }
+  }
+
+  document.getElementById('taskInput').addEventListener('keydown', e => {
+    if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) submitTask();
+  });
+
+  async function refresh() {
+    await Promise.all([fetchMetrics(), fetchLedger()]);
+  }
+
+  refresh();
+  setInterval(refresh, 10000);
 </script>
 </body>
 </html>
