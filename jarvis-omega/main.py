@@ -1,6 +1,5 @@
 import asyncio
 import logging
-import os
 import sys
 
 from dotenv import load_dotenv
@@ -21,14 +20,26 @@ async def main():
     from core.fail_safe_routing import FailSafeRouter
     from modules.admin_dashboard import start_bot
     from modules.tma_server import start_server
+    from modules.worker_pool import WorkerPool
 
     router = FailSafeRouter(brain=brain)
-    logger.info("[Main] FailSafeRouter initialized. Cascade: Gemini → OpenAI → Zhipu → OpenRouter → Ollama")
+    logger.info(
+        "[Main] FailSafeRouter initialized. "
+        "Cascade: Gemini → OpenAI → Zhipu → OpenRouter → Ollama"
+    )
 
-    bot_task = asyncio.create_task(start_bot(brain), name="telegram-bot")
-    server_task = asyncio.create_task(start_server(brain), name="tma-server")
+    pool = WorkerPool(router=router, brain=brain, num_workers=3)
+    await pool.start()
+    logger.info("[Main] WorkerPool started.")
 
-    logger.info("[Main] All services started. Running...")
+    bot_task = asyncio.create_task(
+        start_bot(brain, pool=pool), name="telegram-bot"
+    )
+    server_task = asyncio.create_task(
+        start_server(brain), name="tma-server"
+    )
+
+    logger.info("[Main] All services running: bot + TMA server + 3 workers.")
 
     try:
         await asyncio.gather(bot_task, server_task)
@@ -37,6 +48,9 @@ async def main():
     except Exception as e:
         logger.exception(f"[Main] Fatal error: {e}")
         raise
+    finally:
+        await pool.stop()
+        logger.info("[Main] WorkerPool stopped on exit.")
 
 
 if __name__ == "__main__":

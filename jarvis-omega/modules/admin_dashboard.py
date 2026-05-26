@@ -1,14 +1,13 @@
 import logging
 import os
 
-from aiogram import Bot, Dispatcher, F
 from aiogram.filters import Command
 from aiogram.types import Message
 
 logger = logging.getLogger("jarvis.admin")
 
 
-def create_admin_router(brain):
+def create_admin_router(brain, pool=None):
     from aiogram import Router
 
     router = Router()
@@ -26,8 +25,9 @@ def create_admin_router(brain):
             "Jarvis-Omega Online\n"
             "Commands:\n"
             "/status — system metrics\n"
-            "/pause — pause workers\n"
-            "/resume — resume workers"
+            "/pause  — pause workers\n"
+            "/resume — resume workers\n"
+            "/queue  — queue size"
         )
 
     @router.message(Command("status"))
@@ -36,6 +36,7 @@ def create_admin_router(brain):
             await message.answer("Access denied.")
             return
         metrics = await brain.get_metrics()
+        queue_info = f"\nQueue size: {pool.queue_size}" if pool else ""
         text = (
             f"System Status\n"
             f"Uptime: {metrics['uptime_seconds']}s\n"
@@ -45,7 +46,8 @@ def create_admin_router(brain):
             f"Success rate: {metrics['success_rate']}%\n"
             f"Failed: {metrics['requests_failed']}\n"
             f"Workers paused: {metrics['workers_paused']}\n"
-            f"Profit: ${metrics['profit_usd']:.2f}"
+            f"Profit: ${metrics['profit_usd']:.4f}"
+            f"{queue_info}"
         )
         await message.answer(text)
 
@@ -54,7 +56,10 @@ def create_admin_router(brain):
         if not is_admin(message):
             await message.answer("Access denied.")
             return
-        await brain.pause_workers()
+        if pool:
+            await pool.pause()
+        else:
+            await brain.pause_workers()
         await message.answer("Workers paused.")
         logger.info(f"[Admin] Workers paused by admin {admin_id}")
 
@@ -63,14 +68,25 @@ def create_admin_router(brain):
         if not is_admin(message):
             await message.answer("Access denied.")
             return
-        await brain.resume_workers()
+        if pool:
+            await pool.resume()
+        else:
+            await brain.resume_workers()
         await message.answer("Workers resumed.")
         logger.info(f"[Admin] Workers resumed by admin {admin_id}")
+
+    @router.message(Command("queue"))
+    async def cmd_queue(message: Message):
+        if not is_admin(message):
+            await message.answer("Access denied.")
+            return
+        size = pool.queue_size if pool else 0
+        await message.answer(f"Queue size: {size} pending tasks.")
 
     return router
 
 
-async def start_bot(brain):
+async def start_bot(brain, pool=None):
     from aiogram import Bot, Dispatcher
 
     token = os.getenv("TELEGRAM_BOT_TOKEN")
@@ -79,7 +95,7 @@ async def start_bot(brain):
 
     bot = Bot(token=token)
     dp = Dispatcher()
-    dp.include_router(create_admin_router(brain))
+    dp.include_router(create_admin_router(brain, pool=pool))
 
     logger.info("[Admin] Starting Telegram bot polling...")
     await dp.start_polling(bot)
