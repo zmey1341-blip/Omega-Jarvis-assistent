@@ -1,9 +1,11 @@
-# [Project name]
+# Jarvis-Omega
 
-_Replace the heading above with the project's name, and this line with one sentence describing what this app does for users._
+Автономная AI-система с Telegram-ботом, каскадным роутингом провайдеров и веб-панелью управления (TMA).
 
 ## Run & Operate
 
+- `cd jarvis-omega && pip install -r requirements.txt` — установить зависимости
+- `cd jarvis-omega && python main.py` — запустить бота + TMA-сервер
 - `pnpm --filter @workspace/api-server run dev` — run the API server (port 5000)
 - `pnpm run typecheck` — full typecheck across all packages
 - `pnpm run build` — typecheck + build all packages
@@ -19,26 +21,42 @@ _Replace the heading above with the project's name, and this line with one sente
 - Validation: Zod (`zod/v4`), `drizzle-zod`
 - API codegen: Orval (from OpenAPI spec)
 - Build: esbuild (CJS bundle)
+- **Python bot**: aiogram 3, FastAPI, httpx, python-dotenv
 
 ## Where things live
 
-_Populate as you build — short repo map plus pointers to the source-of-truth file for DB schema, API contracts, theme files, etc._
+- `jarvis-omega/core/brain.py` — системные метрики, SharedState
+- `jarvis-omega/core/fail_safe_routing.py` — каскадный роутер провайдеров AI
+- `jarvis-omega/modules/admin_dashboard.py` — Telegram-бот (aiogram 3)
+- `jarvis-omega/modules/tma_server.py` — FastAPI сервер для TMA
+- `jarvis-omega/static/dashboard.html` — Telegram Mini App (Chart.js + TG Web App SDK)
+- `jarvis-omega/main.py` — точка входа, asyncio.gather всех сервисов
+- `jarvis-omega/.env.template` — шаблон переменных окружения
 
 ## Architecture decisions
 
-_Populate as you build — non-obvious choices a reader couldn't infer from the code (3-5 bullets)._
+- FailSafeRouter использует каскад: Gemini → OpenAI → Zhipu → OpenRouter → Ollama
+- Exponential Backoff + Jitter (15–45 сек) при HTTP 429, логирование переключений
+- brain — синглтон с asyncio.Lock для потокобезопасных метрик
+- FastAPI и aiogram запускаются через asyncio.gather в одном event loop
+- TMA-дашборд опрашивает /api/metrics каждые 10 секунд, рисует Chart.js графики
 
 ## Product
 
-_Describe the high-level user-facing capabilities of this app once they exist._
+- Telegram-бот для администратора с командами `/status`, `/pause`, `/resume`
+- Веб-панель (TMA) с графиками прибыли, статусом провайдеров и управлением воркерами
+- Умный роутинг AI-запросов через 5 провайдеров с автоматическим failover
 
 ## User preferences
 
-_Populate as you build — explicit user instructions worth remembering across sessions._
+- Строго модульная структура Python-проекта
+- Все секреты через .env (python-dotenv)
 
 ## Gotchas
 
-_Populate as you build — sharp edges, "always run X before Y" rules._
+- Скопируй `.env.template` в `.env` и заполни перед запуском
+- `TELEGRAM_ADMIN_ID` — числовой Telegram ID администратора (не username)
+- Ollama должна быть запущена локально на порту 11434 (или задай OLLAMA_BASE_URL)
 
 ## Pointers
 

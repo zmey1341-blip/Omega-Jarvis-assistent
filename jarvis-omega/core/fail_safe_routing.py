@@ -1,0 +1,180 @@
+import asyncio
+import logging
+import os
+import random
+import time
+from enum import Enum
+from typing import Optional
+
+import httpx
+
+logger = logging.getLogger("jarvis.router")
+
+
+class Provider(str, Enum):
+    GEMINI = "gemini"
+    OPENAI = "openai"
+    ZHIPU = "zhipu"
+    OPENROUTER = "openrouter"
+    OLLAMA = "ollama"
+
+
+CASCADE_ORDER = [
+    Provider.GEMINI,
+    Provider.OPENAI,
+    Provider.ZHIPU,
+    Provider.OPENROUTER,
+    Provider.OLLAMA,
+]
+
+JITTER_MIN_SEC = 15
+JITTER_MAX_SEC = 45
+MAX_RETRIES = 5
+
+
+class ProviderConfig:
+    def __init__(self):
+        self.configs = {
+            Provider.GEMINI: {
+                "api_key": os.getenv("GEMINI_API_KEY", ""),
+                "base_url": "https://generativelanguage.googleapis.com/v1beta",
+                "model": "gemini-1.5-flash",
+            },
+            Provider.OPENAI: {
+                "api_key": os.getenv("OPENAI_API_KEY", ""),
+                "base_url": "https://api.openai.com/v1",
+                "model": "gpt-4o-mini",
+            },
+            Provider.ZHIPU: {
+                "api_key": os.getenv("ZHIPU_API_KEY", ""),
+                "base_url": "https://open.bigmodel.cn/api/paas/v4",
+                "model": "glm-4-flash",
+            },
+            Provider.OPENROUTER: {
+                "api_key": os.getenv("OPENROUTER_API_KEY", ""),
+                "base_url": "https://openrouter.ai/api/v1",
+                "model": "meta-llama/llama-3.1-8b-instruct:free",
+            },
+            Provider.OLLAMA: {
+                "api_key": "ollama",
+                "base_url": os.getenv("OLLAMA_BASE_URL", "http://localhost:11434") + "/v1",
+                "model": "llama3.2",
+            },
+        }
+
+    def get(self, provider: Provider) -> dict:
+        return self.configs[provider]
+
+
+class FailSafeRouter:
+    def __init__(self, brain=None):
+        self._config = ProviderConfig()
+        self._current_provider_index = 0
+        self._brain = brain
+
+    @property
+    def current_provider(self) -> Provider:
+        return CASCADE_ORDER[self._current_provider_index]
+
+    async def complete(self, messages: list[dict], **kwargs) -> str:
+        for attempt in range(len(CASCADE_ORDER)):
+            provider = CASCADE_ORDER[self._current_provider_index]
+            try:
+                result = await self._call_provider(provider, messages, **kwargs)
+                if self._brain:
+                    await self._brain.update_provider(provider.value)
+                    await self._brain.record_request(success=True)
+                return result
+            except RateLimitError as e:
+                delay = self._exponential_backoff_with_jitter(e.retry_after)
+                logger.warning(
+                    f"[Router] {provider.value} → HTTP 429. "
+                    f"Backoff {delay:.1f}s before switching."
+                )
+                await asyncio.sleep(delay)
+                self._switch_provider()
+            except ProviderError as e:
+                logger.error(f"[Router] {provider.value} failed: {e}. Switching.")
+                if self._brain:
+                    await self._brain.record_request(success=False)
+                self._switch_provider()
+
+        raise RuntimeError("All providers exhausted. No response available.")
+
+    async def _call_provider(self, provider: Provider, messages: list[dict], **kwargs) -> str:
+        cfg = self._config.get(provider)
+        if not cfg["api_key"] and provider != Provider.OLLAMA:
+            raise ProviderError(f"No API key configured for {provider.value}")
+
+        headers = {
+            "Authorization": f"Bearer {cfg['api_key']}",
+            "Content-Type": "application/json",
+        }
+
+        if provider == Provider.OPENROUTER:
+            headers["HTTP-Referer"] = "https://jarvis-omega.local"
+            headers["X-Title"] = "Jarvis-Omega"
+
+        payload = {
+            "model": cfg["model"],
+            "messages": messages,
+            **kwargs,
+        }
+
+        url = f"{cfg['base_url']}/chat/completions"
+
+        if provider == Provider.GEMINI:
+            return await self._call_gemini(cfg, messages, **kwargs)
+
+        async with httpx.AsyncClient(timeout=60.0) as client:
+            resp = await client.post(url, json=payload, headers=headers)
+
+        if resp.status_code == 429:
+            retry_after = float(resp.headers.get("Retry-After", 0))
+            raise RateLimitError(retry_after=retry_after)
+        if resp.status_code >= 400:
+            raise ProviderError(f"HTTP {resp.status_code}: {resp.text[:200]}")
+
+        data = resp.json()
+        return data["choices"][0]["message"]["content"]
+
+    async def _call_gemini(self, cfg: dict, messages: list[dict], **kwargs) -> str:
+        prompt = "\n".join(m.get("content", "") for m in messages)
+        url = (
+            f"{cfg['base_url']}/models/{cfg['model']}:generateContent"
+            f"?key={cfg['api_key']}"
+        )
+        payload = {"contents": [{"parts": [{"text": prompt}]}]}
+
+        async with httpx.AsyncClient(timeout=60.0) as client:
+            resp = await client.post(url, json=payload)
+
+        if resp.status_code == 429:
+            retry_after = float(resp.headers.get("Retry-After", 0))
+            raise RateLimitError(retry_after=retry_after)
+        if resp.status_code >= 400:
+            raise ProviderError(f"HTTP {resp.status_code}: {resp.text[:200]}")
+
+        data = resp.json()
+        return data["candidates"][0]["content"]["parts"][0]["text"]
+
+    def _switch_provider(self) -> None:
+        prev = CASCADE_ORDER[self._current_provider_index].value
+        self._current_provider_index = (self._current_provider_index + 1) % len(CASCADE_ORDER)
+        next_p = CASCADE_ORDER[self._current_provider_index].value
+        logger.info(f"[Router] Cascade switch: {prev} → {next_p}")
+
+    def _exponential_backoff_with_jitter(self, retry_after: float, attempt: int = 1) -> float:
+        base_delay = max(retry_after, 2 ** attempt)
+        jitter = random.uniform(JITTER_MIN_SEC, JITTER_MAX_SEC)
+        return base_delay + jitter
+
+
+class RateLimitError(Exception):
+    def __init__(self, retry_after: float = 0):
+        self.retry_after = retry_after
+        super().__init__(f"Rate limit hit, retry_after={retry_after}s")
+
+
+class ProviderError(Exception):
+    pass

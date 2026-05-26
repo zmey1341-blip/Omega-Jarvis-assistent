@@ -1,0 +1,338 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Jarvis-Omega | Command Center</title>
+  <script src="https://telegram.org/js/telegram-web-app.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+
+    body {
+      font-family: 'SF Mono', 'Consolas', monospace;
+      background: #0a0a0f;
+      color: #c8e6ff;
+      min-height: 100vh;
+      padding: 16px;
+    }
+
+    header {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      margin-bottom: 24px;
+      border-bottom: 1px solid #1a2a3a;
+      padding-bottom: 16px;
+    }
+
+    header h1 {
+      font-size: 1.2rem;
+      letter-spacing: 3px;
+      text-transform: uppercase;
+      color: #4fc3f7;
+    }
+
+    .status-dot {
+      width: 10px;
+      height: 10px;
+      border-radius: 50%;
+      background: #00e676;
+      animation: pulse 2s infinite;
+    }
+
+    @keyframes pulse {
+      0%, 100% { opacity: 1; }
+      50% { opacity: 0.4; }
+    }
+
+    .grid {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 12px;
+      margin-bottom: 20px;
+    }
+
+    .card {
+      background: #0d1821;
+      border: 1px solid #1a2f45;
+      border-radius: 10px;
+      padding: 16px;
+    }
+
+    .card-label {
+      font-size: 0.65rem;
+      letter-spacing: 2px;
+      text-transform: uppercase;
+      color: #5c8aa8;
+      margin-bottom: 8px;
+    }
+
+    .card-value {
+      font-size: 1.5rem;
+      font-weight: 700;
+      color: #e0f7fa;
+    }
+
+    .card-value.profit { color: #00e676; }
+    .card-value.warn { color: #ffb74d; }
+
+    .chart-container {
+      background: #0d1821;
+      border: 1px solid #1a2f45;
+      border-radius: 10px;
+      padding: 16px;
+      margin-bottom: 20px;
+    }
+
+    .chart-container h2 {
+      font-size: 0.7rem;
+      letter-spacing: 2px;
+      text-transform: uppercase;
+      color: #5c8aa8;
+      margin-bottom: 12px;
+    }
+
+    .actions {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 12px;
+      margin-bottom: 20px;
+    }
+
+    button {
+      padding: 12px;
+      border-radius: 8px;
+      border: none;
+      font-family: inherit;
+      font-size: 0.85rem;
+      font-weight: 600;
+      letter-spacing: 1px;
+      text-transform: uppercase;
+      cursor: pointer;
+      transition: opacity 0.2s;
+    }
+
+    button:active { opacity: 0.7; }
+
+    .btn-pause { background: #d32f2f; color: #fff; }
+    .btn-resume { background: #00897b; color: #fff; }
+    .btn-refresh { background: #1565c0; color: #fff; grid-column: span 2; }
+
+    .provider-tag {
+      display: inline-block;
+      padding: 3px 10px;
+      border-radius: 20px;
+      font-size: 0.75rem;
+      background: #0d2d42;
+      color: #4fc3f7;
+      border: 1px solid #1a4a6a;
+    }
+
+    #toast {
+      position: fixed;
+      bottom: 24px;
+      left: 50%;
+      transform: translateX(-50%);
+      background: #1a3a4a;
+      color: #e0f7fa;
+      padding: 10px 20px;
+      border-radius: 8px;
+      font-size: 0.8rem;
+      opacity: 0;
+      transition: opacity 0.3s;
+      pointer-events: none;
+      border: 1px solid #2a5a7a;
+    }
+  </style>
+</head>
+<body>
+
+<header>
+  <div class="status-dot" id="statusDot"></div>
+  <h1>Jarvis-Omega</h1>
+</header>
+
+<div class="grid">
+  <div class="card">
+    <div class="card-label">Uptime</div>
+    <div class="card-value" id="uptime">—</div>
+  </div>
+  <div class="card">
+    <div class="card-label">Provider</div>
+    <div class="card-value" id="provider"><span class="provider-tag">—</span></div>
+  </div>
+  <div class="card">
+    <div class="card-label">Success Rate</div>
+    <div class="card-value" id="successRate">—</div>
+  </div>
+  <div class="card">
+    <div class="card-label">Total Profit</div>
+    <div class="card-value profit" id="profit">—</div>
+  </div>
+  <div class="card">
+    <div class="card-label">Requests</div>
+    <div class="card-value" id="requests">—</div>
+  </div>
+  <div class="card">
+    <div class="card-label">Workers</div>
+    <div class="card-value warn" id="workers">—</div>
+  </div>
+</div>
+
+<div class="chart-container">
+  <h2>Request History</h2>
+  <canvas id="requestChart" height="120"></canvas>
+</div>
+
+<div class="chart-container">
+  <h2>Profit Over Time</h2>
+  <canvas id="profitChart" height="120"></canvas>
+</div>
+
+<div class="actions">
+  <button class="btn-pause" onclick="sendCommand('pause')">Pause Workers</button>
+  <button class="btn-resume" onclick="sendCommand('resume')">Resume Workers</button>
+  <button class="btn-refresh" onclick="fetchMetrics()">Refresh Metrics</button>
+</div>
+
+<div id="toast"></div>
+
+<script>
+  const tg = window.Telegram?.WebApp;
+  if (tg) {
+    tg.ready();
+    tg.expand();
+  }
+
+  const BASE = '';
+  const requestHistory = [];
+  const profitHistory = [];
+  const timeLabels = [];
+
+  const reqCtx = document.getElementById('requestChart').getContext('2d');
+  const profCtx = document.getElementById('profitChart').getContext('2d');
+
+  const requestChart = new Chart(reqCtx, {
+    type: 'line',
+    data: {
+      labels: timeLabels,
+      datasets: [
+        {
+          label: 'Success',
+          data: [],
+          borderColor: '#00e676',
+          backgroundColor: 'rgba(0,230,118,0.1)',
+          tension: 0.4,
+          fill: true,
+        },
+        {
+          label: 'Failed',
+          data: [],
+          borderColor: '#ef5350',
+          backgroundColor: 'rgba(239,83,80,0.1)',
+          tension: 0.4,
+          fill: true,
+        }
+      ]
+    },
+    options: {
+      responsive: true,
+      plugins: { legend: { labels: { color: '#c8e6ff', font: { size: 10 } } } },
+      scales: {
+        x: { ticks: { color: '#5c8aa8' }, grid: { color: '#1a2a3a' } },
+        y: { ticks: { color: '#5c8aa8' }, grid: { color: '#1a2a3a' } }
+      }
+    }
+  });
+
+  const profitChart = new Chart(profCtx, {
+    type: 'bar',
+    data: {
+      labels: timeLabels,
+      datasets: [{
+        label: 'Profit USD',
+        data: profitHistory,
+        backgroundColor: 'rgba(79,195,247,0.4)',
+        borderColor: '#4fc3f7',
+        borderWidth: 1,
+      }]
+    },
+    options: {
+      responsive: true,
+      plugins: { legend: { labels: { color: '#c8e6ff', font: { size: 10 } } } },
+      scales: {
+        x: { ticks: { color: '#5c8aa8' }, grid: { color: '#1a2a3a' } },
+        y: { ticks: { color: '#5c8aa8' }, grid: { color: '#1a2a3a' } }
+      }
+    }
+  });
+
+  function formatUptime(seconds) {
+    const h = Math.floor(seconds / 3600);
+    const m = Math.floor((seconds % 3600) / 60);
+    const s = Math.floor(seconds % 60);
+    return `${h}h ${m}m ${s}s`;
+  }
+
+  function showToast(msg, ok = true) {
+    const el = document.getElementById('toast');
+    el.textContent = msg;
+    el.style.background = ok ? '#0d2d42' : '#3d0d0d';
+    el.style.opacity = '1';
+    setTimeout(() => { el.style.opacity = '0'; }, 2500);
+  }
+
+  async function fetchMetrics() {
+    try {
+      const res = await fetch(`${BASE}/api/metrics`);
+      if (!res.ok) throw new Error('API error');
+      const m = await res.json();
+
+      document.getElementById('uptime').textContent = formatUptime(m.uptime_seconds);
+      document.getElementById('provider').innerHTML = `<span class="provider-tag">${m.active_provider}</span>`;
+      document.getElementById('successRate').textContent = `${m.success_rate}%`;
+      document.getElementById('profit').textContent = `$${m.profit_usd.toFixed(2)}`;
+      document.getElementById('requests').textContent = m.requests_total;
+      document.getElementById('workers').textContent = m.workers_paused ? 'Paused' : 'Running';
+      document.getElementById('workers').style.color = m.workers_paused ? '#ef5350' : '#00e676';
+      document.getElementById('statusDot').style.background = m.workers_paused ? '#ef5350' : '#00e676';
+
+      const label = new Date().toLocaleTimeString();
+      if (timeLabels.length > 10) {
+        timeLabels.shift();
+        requestChart.data.datasets[0].data.shift();
+        requestChart.data.datasets[1].data.shift();
+        profitHistory.shift();
+      }
+      timeLabels.push(label);
+      requestChart.data.datasets[0].data.push(m.requests_success);
+      requestChart.data.datasets[1].data.push(m.requests_failed);
+      profitHistory.push(m.profit_usd);
+      requestChart.update();
+      profitChart.update();
+    } catch (e) {
+      showToast('Failed to fetch metrics', false);
+    }
+  }
+
+  async function sendCommand(cmd) {
+    try {
+      const res = await fetch(`${BASE}/api/command`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ command: cmd })
+      });
+      const data = await res.json();
+      showToast(data.message || 'Command sent', res.ok);
+      if (res.ok) fetchMetrics();
+    } catch (e) {
+      showToast('Command failed', false);
+    }
+  }
+
+  fetchMetrics();
+  setInterval(fetchMetrics, 10000);
+</script>
+</body>
+</html>
