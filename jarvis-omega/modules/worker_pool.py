@@ -4,7 +4,6 @@ import logging
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any
 
 logger = logging.getLogger("jarvis.workers")
 
@@ -20,9 +19,10 @@ class Task:
 
 
 class WorkerPool:
-    def __init__(self, router, brain, num_workers: int = 3):
+    def __init__(self, router, brain, notifier=None, num_workers: int = 3):
         self._router = router
         self._brain = brain
+        self._notifier = notifier
         self._num_workers = num_workers
         self._queue: asyncio.Queue[Task] = asyncio.Queue()
         self._running_event = asyncio.Event()
@@ -90,13 +90,13 @@ class WorkerPool:
 
     async def _process_task(self, worker_id: int, task: Task) -> None:
         start = time.time()
-        logger.info(f"[Worker-{worker_id}] Processing task: {task.prompt[:60]!r}")
+        logger.info(f"[Worker-{worker_id}] Processing: {task.prompt[:60]!r}")
         try:
             messages = [{"role": "user", "content": task.prompt}]
             response = await self._router.complete(messages)
             elapsed = round(time.time() - start, 3)
-
             cost_usd = self._estimate_cost(task.prompt, response)
+
             await self._write_ledger(
                 worker_id=worker_id,
                 prompt=task.prompt,
@@ -105,14 +105,33 @@ class WorkerPool:
                 elapsed=elapsed,
                 metadata=task.metadata,
             )
+
             logger.info(
                 f"[Worker-{worker_id}] Done in {elapsed}s | "
-                f"cost=${cost_usd:.4f} | "
+                f"cost=${cost_usd:.6f} | "
                 f"provider={self._router.current_provider.value}"
             )
+
+            if self._notifier:
+                snippet = response[:120].replace("<", "&lt;").replace(">", "&gt;")
+                await self._notifier.send_alert(
+                    f"✅ <b>Задача выполнена</b>\n"
+                    f"Worker: #{worker_id} · Provider: <code>{self._router.current_provider.value}</code>\n"
+                    f"Время: {elapsed}s · Стоимость: <code>${cost_usd:.6f}</code>\n"
+                    f"<i>{snippet}</i>",
+                    dedup_key="task_done",
+                )
+
         except Exception as e:
             logger.error(f"[Worker-{worker_id}] Task failed, skipping: {e}")
             await self._brain.record_request(success=False)
+
+            if self._notifier:
+                await self._notifier.send_alert(
+                    f"❌ <b>Задача провалена</b>\n"
+                    f"Worker: #{worker_id} · Ошибка: <code>{str(e)[:100]}</code>",
+                    dedup_key="task_failed",
+                )
 
     async def _write_ledger(
         self,
@@ -146,7 +165,6 @@ class WorkerPool:
                     }
                 )
                 data["transactions"] = data["transactions"][-500:]
-
                 LEDGER_PATH.write_text(json.dumps(data, indent=2, ensure_ascii=False))
             except Exception as e:
                 logger.error(f"[Workers] Failed to write ledger: {e}")

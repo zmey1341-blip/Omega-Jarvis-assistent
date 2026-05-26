@@ -19,16 +19,20 @@ async def main():
     from core.brain import brain
     from core.fail_safe_routing import FailSafeRouter
     from modules.admin_dashboard import start_bot
+    from modules.notifier import Notifier
     from modules.tma_server import start_server
     from modules.worker_pool import WorkerPool
 
-    router = FailSafeRouter(brain=brain)
+    notifier = Notifier()
+    logger.info("[Main] Notifier initialized (cooldown: 5 min per alert key).")
+
+    router = FailSafeRouter(brain=brain, notifier=notifier)
     logger.info(
         "[Main] FailSafeRouter initialized. "
         "Cascade: Gemini → OpenAI → Zhipu → OpenRouter → Ollama"
     )
 
-    pool = WorkerPool(router=router, brain=brain, num_workers=3)
+    pool = WorkerPool(router=router, brain=brain, notifier=notifier, num_workers=3)
     await pool.start()
     logger.info("[Main] WorkerPool started with 3 workers.")
 
@@ -39,7 +43,7 @@ async def main():
         start_server(brain, pool=pool), name="tma-server"
     )
 
-    logger.info("[Main] All services running: bot + TMA server + 3 workers.")
+    logger.info("[Main] All services running: bot + TMA server + 3 workers + notifier.")
 
     try:
         await asyncio.gather(bot_task, server_task)

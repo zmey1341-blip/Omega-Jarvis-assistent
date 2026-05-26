@@ -4,7 +4,6 @@ import os
 import random
 import time
 from enum import Enum
-from typing import Optional
 
 import httpx
 
@@ -29,7 +28,6 @@ CASCADE_ORDER = [
 
 JITTER_MIN_SEC = 15
 JITTER_MAX_SEC = 45
-MAX_RETRIES = 5
 
 
 class ProviderConfig:
@@ -67,17 +65,18 @@ class ProviderConfig:
 
 
 class FailSafeRouter:
-    def __init__(self, brain=None):
+    def __init__(self, brain=None, notifier=None):
         self._config = ProviderConfig()
         self._current_provider_index = 0
         self._brain = brain
+        self._notifier = notifier
 
     @property
     def current_provider(self) -> Provider:
         return CASCADE_ORDER[self._current_provider_index]
 
     async def complete(self, messages: list[dict], **kwargs) -> str:
-        for attempt in range(len(CASCADE_ORDER)):
+        for _ in range(len(CASCADE_ORDER)):
             provider = CASCADE_ORDER[self._current_provider_index]
             try:
                 result = await self._call_provider(provider, messages, **kwargs)
@@ -92,12 +91,12 @@ class FailSafeRouter:
                     f"Backoff {delay:.1f}s before switching."
                 )
                 await asyncio.sleep(delay)
-                self._switch_provider()
+                await self._switch_provider(from_provider=provider)
             except ProviderError as e:
                 logger.error(f"[Router] {provider.value} failed: {e}. Switching.")
                 if self._brain:
                     await self._brain.record_request(success=False)
-                self._switch_provider()
+                await self._switch_provider(from_provider=provider)
 
         raise RuntimeError("All providers exhausted. No response available.")
 
@@ -106,25 +105,19 @@ class FailSafeRouter:
         if not cfg["api_key"] and provider != Provider.OLLAMA:
             raise ProviderError(f"No API key configured for {provider.value}")
 
+        if provider == Provider.GEMINI:
+            return await self._call_gemini(cfg, messages, **kwargs)
+
         headers = {
             "Authorization": f"Bearer {cfg['api_key']}",
             "Content-Type": "application/json",
         }
-
         if provider == Provider.OPENROUTER:
             headers["HTTP-Referer"] = "https://jarvis-omega.local"
             headers["X-Title"] = "Jarvis-Omega"
 
-        payload = {
-            "model": cfg["model"],
-            "messages": messages,
-            **kwargs,
-        }
-
+        payload = {"model": cfg["model"], "messages": messages, **kwargs}
         url = f"{cfg['base_url']}/chat/completions"
-
-        if provider == Provider.GEMINI:
-            return await self._call_gemini(cfg, messages, **kwargs)
 
         async with httpx.AsyncClient(timeout=60.0) as client:
             resp = await client.post(url, json=payload, headers=headers)
@@ -135,8 +128,7 @@ class FailSafeRouter:
         if resp.status_code >= 400:
             raise ProviderError(f"HTTP {resp.status_code}: {resp.text[:200]}")
 
-        data = resp.json()
-        return data["choices"][0]["message"]["content"]
+        return resp.json()["choices"][0]["message"]["content"]
 
     async def _call_gemini(self, cfg: dict, messages: list[dict], **kwargs) -> str:
         prompt = "\n".join(m.get("content", "") for m in messages)
@@ -155,14 +147,22 @@ class FailSafeRouter:
         if resp.status_code >= 400:
             raise ProviderError(f"HTTP {resp.status_code}: {resp.text[:200]}")
 
-        data = resp.json()
-        return data["candidates"][0]["content"]["parts"][0]["text"]
+        return resp.json()["candidates"][0]["content"]["parts"][0]["text"]
 
-    def _switch_provider(self) -> None:
-        prev = CASCADE_ORDER[self._current_provider_index].value
+    async def _switch_provider(self, from_provider: Provider | None = None) -> None:
+        prev_name = (from_provider or CASCADE_ORDER[self._current_provider_index]).value
         self._current_provider_index = (self._current_provider_index + 1) % len(CASCADE_ORDER)
-        next_p = CASCADE_ORDER[self._current_provider_index].value
-        logger.info(f"[Router] Cascade switch: {prev} → {next_p}")
+        next_provider = CASCADE_ORDER[self._current_provider_index]
+        next_name = next_provider.value
+
+        logger.info(f"[Router] Cascade switch: {prev_name} → {next_name}")
+
+        if self._notifier:
+            await self._notifier.send_alert(
+                f"⚠️ <b>Alert: Переключение на резервный API</b>\n"
+                f"<code>{prev_name}</code> недоступен → <code>{next_name}</code>",
+                dedup_key=f"provider_switch:{next_name}",
+            )
 
     def _exponential_backoff_with_jitter(self, retry_after: float, attempt: int = 1) -> float:
         base_delay = max(retry_after, 2 ** attempt)
