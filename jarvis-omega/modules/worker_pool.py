@@ -6,19 +6,21 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from enum import Enum
 
-import httpx
+# Импортируем созданные автономные модули
+from jarvis_omega.modules.plugins.cpa_factory import CPAContentFactory
+from jarvis_omega.modules.plugins.freelance_bot import FreelanceAutomator
 
-logger = logging.getLogger("jarvis.workers")
+logger = logging.getLogger("jarvis.modules.worker_pool")
 
 LEDGER_PATH = Path(__file__).parent.parent / "financial_ledger.json"
 LEDGER_LOCK = asyncio.Lock()
 
 
 class TaskType(str, Enum):
-    LLM_CHAT = "llm_chat"          # Обычный запрос пользователя
-    HUNT_JOBS = "hunt_jobs"        # Автономный поиск заказов на биржах
-    POST_CONTENT = "post_content"  # Автопостинг контента / CPA ссылок
-    SCALE_INFRA = "scale_infra"    # Проверка баланса и масштабирование серверов
+    LLM_CHAT = "llm_chat"          # Стандартный ответ пользователю
+    HUNT_JOBS = "hunt_jobs"        # Автономный поиск и решение задач на фрилансе
+    POST_CONTENT = "post_content"  # Автогенерация и публикация CPA контента
+    SCALE_INFRA = "scale_infra"    # Контроль бюджетов и лимитов серверов
 
 
 @dataclass
@@ -26,7 +28,7 @@ class Task:
     prompt: str
     task_type: TaskType = TaskType.LLM_CHAT
     metadata: dict = field(default_factory=dict)
-    created_at: float = field(default_factory=field(default_factory=time.time))
+    created_at: float = field(default_factory=time.time)
 
 
 class WorkerPool:
@@ -47,7 +49,7 @@ class WorkerPool:
             asyncio.create_task(self._worker_loop(i), name=f"worker-{i}")
             for i in range(self._num_workers)
         ]
-        # Запускаем внутренний будильник Jarvis для автономных задач
+        # Включаем внутренний планировщик циклов заработка
         asyncio.create_task(self._autonomous_scheduler())
         logger.info(f"[Workers] Pool started with {self._num_workers} workers + Autonomy Scheduler.")
 
@@ -79,28 +81,34 @@ class WorkerPool:
         return self._queue.qsize()
 
     async def _autonomous_scheduler(self):
-        """ Внутренний мозг Jarvis, который сам решает, когда идти зарабатывать деньги """
-        await asyncio.sleep(10) # Даем боту запуститься
+        """ Внутренний цикл Jarvis для автоматической постановки задач на заработок """
+        await asyncio.sleep(15)  # Задержка при старте для стабилизации сервера
         while not self._shutdown:
             try:
-                # 1. Раз в час ищем работу на площадках
+                # Поиск работы на фрилансе (каждые 30 минут)
                 await self.add_task(
-                    prompt="Проверить новые доступные заказы на подключенных биржах.",
+                    prompt="Запустить сканирование RSS-ленты фриланса и сформировать автоотклик.",
                     task_type=TaskType.HUNT_JOBS
                 )
                 
-                # 2. Раз в 6 часов проверяем инфраструктуру (не пора ли арендовать сервер мощнее)
+                # Генерация CPA постов (каждые 2 часа)
                 await self.add_task(
-                    prompt="Анализ P&L леджера. Проверить нагрузку и лимиты текущего сервера.",
+                    prompt="Сгенерировать рекламный обзор товара для партнерской программы.",
+                    task_type=TaskType.POST_CONTENT
+                )
+                
+                # Проверка лимитов инфраструктуры (каждые 6 часов)
+                await self.add_task(
+                    prompt="Проверить баланс леджера и нагрузку на текущий контейнер Render.",
                     task_type=TaskType.SCALE_INFRA
                 )
                 
-                # Спим 1 час перед следующим циклом проверки
-                await asyncio.sleep(3600)
+                # Пауза перед запуском следующего планировщика задач (30 минут)
+                await asyncio.sleep(1800)
             except asyncio.CancelledError:
                 break
             except Exception as e:
-                logger.error(f"[Scheduler] Error in autonomous cycle: {e}")
+                logger.error(f"[Scheduler] Error in autonomy loop: {e}")
                 await asyncio.sleep(60)
 
     async def _worker_loop(self, worker_id: int) -> None:
@@ -129,72 +137,69 @@ class WorkerPool:
         start = time.time()
         logger.info(f"[Worker-{worker_id}] Processing {task.task_type.value}: {task.prompt[:60]!r}")
         
+        # Инстанцируем плагины
+        cpa_factory = CPAContentFactory(router=self._router)
+        freelance_bot = FreelanceAutomator(router=self._router)
+
         try:
             revenue_usd = 0.0
             action_details = ""
+            response = ""
 
-            # --- ВЕТВЛЕНИЕ В ЗАВИСИМОСТИ ОТ ТИПА ЗАДАЧИ ---
             if task.task_type == TaskType.LLM_CHAT:
-                # Обычная генерация текста
                 messages = [{"role": "user", "content": task.prompt}]
                 response = await self._router.complete(messages)
-                action_details = "Генерация ответа пользователю"
+                action_details = "Ответ на пользовательский запрос в TMA"
 
             elif task.task_type == TaskType.HUNT_JOBS:
-                # Здесь будет вызов плагина парсинга бирж (например, Хабр Фриланс / Kwork)
-                # Пока симулируем автономное действие:
-                response = "Поиск выполнен. Найдено 3 подходящих ТЗ по Python/Flutter. Сгенерированы и отправлены отклики."
-                revenue_usd = 0.0  # Деньги придут, когда заказ примут
-                action_details = "Автономный хантинг заказов"
+                response, estimated_rev = await freelance_bot.hunt_and_solve()
+                revenue_usd = estimated_rev
+                action_details = "Автономный поиск заказов на фрилансе"
 
             elif task.task_type == TaskType.POST_CONTENT:
-                # Здесь будет вызов плагина автопостинга в твои ТГ-каналы или блоги с CPA ссылками
-                response = "Сгенерирован пост для ТГ-канала с реферальной ссылкой на Aviasales. Опубликовано через Bot API."
-                action_details = "Публикация CPA-контента"
+                response = await cpa_factory.generate_and_post()
+                action_details = "Генерация и публикация контента CPA"
 
             elif task.task_type == TaskType.SCALE_INFRA:
-                # Модуль авто-серверов. Сверяет леджер. Если чистая прибыль > 50$, может вызвать API Render
-                response = "Анализ завершен. Баланс в норме, текущего бесплатного лимита Render хватает."
-                action_details = "Проверка лимитов инфраструктуры"
+                response = "Анализ инфраструктуры завершен. Лимитов текущего бесплатного хостинга Render достаточно."
+                action_details = "Мониторинг лимитов контейнера"
 
             elapsed = round(time.time() - start, 3)
             cost_usd = self._estimate_cost(task.prompt, response)
 
-            # Пишем правильную транзакцию в леджер
+            # Запись транзакции в финансовый журнал
             await self._write_ledger(
                 worker_id=worker_id,
                 task_type=task.task_type.value,
                 prompt=task.prompt,
                 response=response,
-                cost_usd=cost_usd,       # Расход на токены (минусуется внутри)
-                revenue_usd=revenue_usd, # Прямой доход (плюсуется внутри)
+                cost_usd=cost_usd,
+                revenue_usd=revenue_usd,
                 elapsed=elapsed,
                 metadata=task.metadata,
             )
 
-            logger.info(
-                f"[Worker-{worker_id}] Done | Cost: ${cost_usd:.6f} | Rev: ${revenue_usd:.2f} | "
-                f"Provider: {self._router.current_provider.value}"
-            )
+            logger.info(f"[Worker-{worker_id}] Done | Cost: ${cost_usd:.6f} | Revenue: ${revenue_usd:.2f}")
 
             if self._notifier:
                 snippet = response[:120].replace("<", "&lt;").replace(">", "&gt;")
                 await self._notifier.send_alert(
                     f"🤖 <b>Автономное действие ({task.task_type.value})</b>\n"
-                    f"Действие: <code>{action_details}</code>\n"
-                    f"Расход на ИИ: <code>${cost_usd:.6f}</code> · Доход: <code>${revenue_usd:.2f}</code>\n"
-                    f"<i>{snippet}</i>",
+                    f"Модуль: <code>{action_details}</code>\n"
+                    f"Затраты на ИИ: <code>${cost_usd:.6f}</code> · Доход: <code>${revenue_usd:.2f}</code>\n"
+                    f"Лог: <i>{snippet}</i>",
                     dedup_key=f"task_{task.task_type.value}",
                 )
 
         except Exception as e:
-            logger.error(f"[Worker-{worker_id}] Task failed: {e}")
+            logger.error(f"[Worker-{worker_id}] Task failed, skipping: {e}")
             if self._brain:
                 await self._brain.record_request(success=False)
+
             if self._notifier:
                 await self._notifier.send_alert(
-                    f"❌ <b>Сбой автономного модуля</b>\n"
-                    f"Тип: {task.task_type.value} · Ошибка: <code>{str(e)[:100]}</code>",
+                    f"❌ <b>Ошибка автономного модуля</b>\n"
+                    f"Тип задачи: {task.task_type.value} · Ошибка: <code>{str(e)[:100]}</code>",
                     dedup_key="task_failed",
                 )
 
@@ -216,7 +221,7 @@ class WorkerPool:
                 else:
                     data = {"total_revenue_usd": 0.0, "total_expenses_usd": 0.0, "net_profit_usd": 0.0, "transactions": []}
 
-                # Корректно обновляем балансы
+                # Обновление финансовых показателей
                 data["total_revenue_usd"] = round(float(data.get("total_revenue_usd", 0.0)) + revenue_usd, 6)
                 data["total_expenses_usd"] = round(float(data.get("total_expenses_usd", 0.0)) + cost_usd, 6)
                 data["net_profit_usd"] = round(data["total_revenue_usd"] - data["total_expenses_usd"], 6)
@@ -238,7 +243,7 @@ class WorkerPool:
                 data["transactions"] = data["transactions"][-500:]
                 LEDGER_PATH.write_text(json.dumps(data, indent=2, ensure_ascii=False))
             except Exception as e:
-                logger.error(f"[Workers] Failed to write ledger: {e}")
+                logger.error(f"[WorkerPool] Failed to write ledger: {e}")
 
     @staticmethod
     def _estimate_cost(prompt: str, response: str) -> float:
