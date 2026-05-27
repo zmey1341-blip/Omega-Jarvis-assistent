@@ -35,8 +35,8 @@ class ProviderConfig:
         self.configs = {
             Provider.GEMINI: {
                 "api_key": os.getenv("GEMINI_API_KEY", ""),
-                "base_url": "https://generativelanguage.googleapis.com/v1beta",
-                "model": "gemini-1.5-flash",
+                "base_url": "https://generativelanguage.googleapis.com/v1",
+                "model": "Gemini 2.5 Flash",
             },
             Provider.OPENAI: {
                 "api_key": os.getenv("OPENAI_API_KEY", ""),
