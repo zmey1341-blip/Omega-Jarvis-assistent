@@ -65,7 +65,6 @@ def create_admin_router(brain, pool=None, notifier=None, jarvis_mind=None):
             await message.answer("❌ Ошибка: Модуль JarvisMind не подключен к роутеру.")
             return
 
-        # Получаем текст задачи (в Aiogram 3 это делается через отсечение команды)
         task = message.text.split(maxsplit=1)[1] if len(message.text.split()) > 1 else ""
         
         if not task:
@@ -81,10 +80,7 @@ def create_admin_router(brain, pool=None, notifier=None, jarvis_mind=None):
             "Анализирую архитектуру, пишу тестовый код и проверяю его безопасность. Подожди немного..."
         )
         
-        # Запускаем генерацию и авто-тесты из ядра мышления
         result = await jarvis_mind.self_develop(task)
-        
-        # Отправляем полный отчет о проделанной работе в чат
         await message.answer(result, parse_mode="Markdown")
 
     @router.message(Command("pause"))
@@ -144,6 +140,25 @@ def create_admin_router(brain, pool=None, notifier=None, jarvis_mind=None):
             lines.append(f"[{dt}] {clean}")
         await message.answer("\n".join(lines))
 
+    # --- ТЕСТОВЫЙ ФОЛБЕК-ХЭНДЛЕР ДЛЯ ДИАГНОСТИКИ ID ---
+    @router.message()
+    async def fallback_debug(message: Message):
+        user_id = message.from_user.id if message.from_user else "Unknown"
+        username = message.from_user.username if message.from_user else "No Username"
+        env_admin_id = os.getenv("TELEGRAM_ADMIN_ID", "NOT_SET")
+        
+        logger.warning(
+            f"\n"
+            f"⚠️ --- [DEBUG ХЭНДЛЕР] ---\n"
+            f"Пришёл неотработанный апдейт от пользователя!\n"
+            f"Имя в ТГ: @{username}\n"
+            f"Его реальный ID: {user_id}\n"
+            f"В Render зашит TELEGRAM_ADMIN_ID: {env_admin_id}\n"
+            f"Совпадение (строковое): {str(user_id) == str(env_admin_id).strip()}\n"
+            f"Текст сообщения: {message.text}\n"
+            f"------------------------"
+        )
+
     return router
 
 
@@ -157,7 +172,6 @@ async def start_bot(brain, pool=None, notifier=None, jarvis_mind=None):
     bot = Bot(token=token)
     dp = Dispatcher()
     
-    # Передаем jarvis_mind внутрь конструктора роутера
     dp.include_router(create_admin_router(brain, pool=pool, notifier=notifier, jarvis_mind=jarvis_mind))
 
     logger.info("[Admin] Starting Telegram bot polling...")
