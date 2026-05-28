@@ -2,25 +2,28 @@ FROM python:3.10-slim
 
 WORKDIR /app
 
-# Обновляем систему и ставим системные библиотеки для Chromium
+# Установка зависимостей для корректной работы Chromium в режиме headless
 RUN apt-get update && apt-get install -y --no-install-recommends \
     wget \
     gnupg \
     && rm -rf /var/lib/apt/lists/*
 
-# Копируем списки зависимостей
+# Копируем requirements
 COPY requirements.txt .
 
-# Ставим свежие пакеты
+# Принудительно сбрасываем кэш pip и ставим пакеты
 RUN pip install --no-cache-dir --upgrade pip \
     && pip install --no-cache-dir -r requirements.txt
 
-# Устанавливаем сам Playwright браузер и его бинарные зависимости
+# Установка браузера Playwright и системных библиотек Linux (.so файлов)
 RUN playwright install chromium \
     && playwright install-deps chromium
 
-# Копируем остальной проект
+# Копируем проект (содержимое папки jarvis-omega переносится в корень /app)
 COPY jarvis-omega/ .
+
+# Добавляем корень в PYTHONPATH, чтобы Python видел модули при любых раскладах импорта
+ENV PYTHONPATH=/app
 
 EXPOSE 10000
 
