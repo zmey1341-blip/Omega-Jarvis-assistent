@@ -25,6 +25,32 @@ class TaskRequest(BaseModel):
     metadata: dict = {}
 
 
+def _get_queue_size(pool) -> int:
+    """Безопасное извлечение размера очереди из WorkerPool без риска вызвать AttributeError."""
+    if pool is None:
+        return 0
+    try:
+        # Вариант 1: queue_size это метод или свойство
+        if hasattr(pool, "queue_size"):
+            val = pool.queue_size
+            return val() if callable(val) else val
+        
+        # Вариант 2: Стандартная асинхронная очередь внутри pool.queue
+        if hasattr(pool, "queue") and hasattr(pool.queue, "qsize"):
+            return pool.queue.qsize()
+            
+        # Вариант 3: Очередь на базе защищенного атрибута pool._queue
+        if hasattr(pool, "_queue") and hasattr(pool._queue, "qsize"):
+            return pool._queue.qsize()
+
+        # Вариант 4: Обычный список задач pool.tasks
+        if hasattr(pool, "tasks") and hasattr(pool.tasks, "__len__"):
+            return len(pool.tasks)
+    except Exception as e:
+        logger.warning(f"[TMA] Could not auto-detect queue size: {e}")
+    return 0
+
+
 def create_app(brain, pool=None, notifier=None) -> FastAPI:
     app = FastAPI(title="Jarvis-Omega TMA API", version="1.0.0")
 
@@ -43,7 +69,7 @@ def create_app(brain, pool=None, notifier=None) -> FastAPI:
         try:
             metrics = await brain.get_metrics()
             if pool is not None:
-                metrics["queue_size"] = pool.queue_size
+                metrics["queue_size"] = _get_queue_size(pool)
             return JSONResponse(metrics)
         except Exception as e:
             logger.error(f"[TMA] Error fetching metrics: {e}")
@@ -75,7 +101,7 @@ def create_app(brain, pool=None, notifier=None) -> FastAPI:
         try:
             await pool.add_task(req.prompt.strip(), req.metadata)
             logger.info(f"[TMA] Task enqueued via API: {req.prompt[:60]!r}")
-            return {"status": "queued", "queue_size": pool.queue_size}
+            return {"status": "queued", "queue_size": _get_queue_size(pool)}
         except Exception as e:
             logger.error(f"[TMA] Failed to enqueue task: {e}")
             raise HTTPException(status_code=500, detail="Failed to enqueue task")
@@ -100,7 +126,7 @@ def create_app(brain, pool=None, notifier=None) -> FastAPI:
         elif cmd == "status":
             metrics = await brain.get_metrics()
             if pool is not None:
-                metrics["queue_size"] = pool.queue_size
+                metrics["queue_size"] = _get_queue_size(pool)
             return {"status": "ok", "metrics": metrics}
         else:
             raise HTTPException(status_code=400, detail=f"Unknown command: {cmd}")
@@ -124,9 +150,6 @@ def create_app(brain, pool=None, notifier=None) -> FastAPI:
 
 async def start_server(brain, pool=None, notifier=None):
     host = os.getenv("TMA_SERVER_HOST", "0.0.0.0")
-    
-    # Приоритет отдаем переменной PORT (её подставляет Render в облаке)
-    # Если её нет, берем TMA_SERVER_PORT, если и её нет — дефолтный 8000 для локалки
     port = int(os.getenv("PORT", os.getenv("TMA_SERVER_PORT", "8000")))
 
     app = create_app(brain, pool=pool, notifier=notifier)
