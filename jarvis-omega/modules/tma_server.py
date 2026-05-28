@@ -124,7 +124,10 @@ def create_app(brain, pool=None, notifier=None) -> FastAPI:
 
 async def start_server(brain, pool=None, notifier=None):
     host = os.getenv("TMA_SERVER_HOST", "0.0.0.0")
-    port = int(os.getenv("TMA_SERVER_PORT", "8000"))
+    
+    # Приоритет отдаем переменной PORT (её подставляет Render в облаке)
+    # Если её нет, берем TMA_SERVER_PORT, если и её нет — дефолтный 8000 для локалки
+    port = int(os.getenv("PORT", os.getenv("TMA_SERVER_PORT", "8000")))
 
     app = create_app(brain, pool=pool, notifier=notifier)
     config = uvicorn.Config(app=app, host=host, port=port, log_level="info")
