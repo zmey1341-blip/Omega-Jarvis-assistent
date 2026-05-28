@@ -6,7 +6,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from enum import Enum
 
-# Импорты плагинов (путь должен соответствовать структуре jarvis-omega/modules/plugins/)
+# Импорт плагина
 from modules.plugins.advego_job_hunter import AdvegoJobHunter
 
 logger = logging.getLogger("jarvis.modules.worker_pool")
@@ -16,7 +16,7 @@ LEDGER_LOCK = asyncio.Lock()
 
 class TaskType(str, Enum):
     LLM_CHAT = "llm_chat"
-    HUNT_JOBS = "hunt_jobs"        # Поиск заказов на Advego
+    HUNT_JOBS = "hunt_jobs"
     POST_CONTENT = "post_content"
     SCALE_INFRA = "scale_infra"
 
@@ -25,7 +25,7 @@ class Task:
     prompt: str
     task_type: TaskType = TaskType.LLM_CHAT
     metadata: dict = field(default_factory=dict)
-    created_at: float = field(default_factory=time.time)
+    created_at: float = field(default_factory=time.time)  # Исправлено здесь
 
 class WorkerPool:
     def __init__(self, router, brain, notifier=None, num_workers: int = 3):
@@ -46,7 +46,7 @@ class WorkerPool:
             for i in range(self._num_workers)
         ]
         asyncio.create_task(self._autonomous_scheduler())
-        logger.info(f"[Workers] Pool started with {self._num_workers} workers + Advego Autonomy.")
+        logger.info(f"[Workers] Pool started with {self._num_workers} workers.")
 
     async def stop(self) -> None:
         self._shutdown = True
@@ -60,18 +60,20 @@ class WorkerPool:
         await self._queue.put(task)
 
     async def _autonomous_scheduler(self):
-        """ Цикл Jarvis для автоматического поиска прибыли """
-        await asyncio.sleep(10) 
+        """ Внутренний цикл автоматической постановки задач """
+        await asyncio.sleep(15)
         while not self._shutdown:
             try:
-                # Ставим задачу HUNT_JOBS раз в 30 минут
+                # Поиск работы на Advego (раз в 30 минут)
                 await self.add_task(
-                    prompt="Сканирование ленты Advego на наличие заказов без тендера.",
+                    prompt="Сканирование ленты Advego на наличие доступных заказов.",
                     task_type=TaskType.HUNT_JOBS
                 )
-                await asyncio.sleep(1800) 
+                await asyncio.sleep(1800)
+            except asyncio.CancelledError:
+                break
             except Exception as e:
-                logger.error(f"[Scheduler] Error: {e}")
+                logger.error(f"[Scheduler] Error in autonomous cycle: {e}")
                 await asyncio.sleep(60)
 
     async def _worker_loop(self, worker_id: int) -> None:
@@ -92,7 +94,6 @@ class WorkerPool:
 
     async def _process_task(self, worker_id: int, task: Task) -> None:
         start = time.time()
-        
         try:
             revenue_usd = 0.0
             response = ""
@@ -104,11 +105,10 @@ class WorkerPool:
                 action_details = "Чат с пользователем"
 
             elif task.task_type == TaskType.HUNT_JOBS:
-                # Включаем наш Advego Hunter
                 hunter = AdvegoJobHunter(router=self._router)
                 response, rev_rub = await hunter.hunt_and_execute()
-                revenue_usd = rev_rub / 91.0 # Конвертация рубля в USD для леджера
-                action_details = "Охота на Advego"
+                revenue_usd = rev_rub / 91.0
+                action_details = "Работа на Advego"
 
             elapsed = round(time.time() - start, 3)
             cost_usd = self._estimate_cost(task.prompt, response)
@@ -124,17 +124,8 @@ class WorkerPool:
                 metadata=task.metadata
             )
 
-            if self._notifier and revenue_usd > 0:
-                await self._notifier.send_alert(
-                    f"💰 <b>Jarvis заработал деньги!</b>\n"
-                    f"Действие: <code>{action_details}</code>\n"
-                    f"Результат: {response}\n"
-                    f"Профит: <code>${revenue_usd:.2f}</code>",
-                    dedup_key="revenue_alert"
-                )
-
         except Exception as e:
-            logger.error(f"Task failed: {e}")
+            logger.error(f"Task execution failed: {e}")
 
     async def _write_ledger(self, **kwargs) -> None:
         async with LEDGER_LOCK:
@@ -158,6 +149,5 @@ class WorkerPool:
 
     @staticmethod
     def _estimate_cost(prompt: str, response: str) -> float:
-        # Примерная оценка стоимости токенов ИИ
         tokens = (len(prompt) + len(response)) / 4
-        return (tokens / 1000) * 0.01
+        return (tokens / 1000) * 0.015
