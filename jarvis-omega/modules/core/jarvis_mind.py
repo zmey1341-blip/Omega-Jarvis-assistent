@@ -35,8 +35,9 @@ class JarvisMind:
         logger.info(f"[Джарвис] Запущено мышление над задачей: '{task}'")
         
         try:
-            # ИСПРАВЛЕНО: вызываем .generate() вместо .generate_text() под твой FailSafeRouter
-            ai_response = await self.ai_router.generate(prompt) 
+            # ИСПРАВЛЕНО: Приводим к формату FailSafeRouter.complete([{"role": "user", "content": ...}])
+            messages = [{"role": "user", "content": prompt}]
+            ai_response = await self.ai_router.complete(messages) 
             code = self._extract_code(ai_response)
         except Exception as e:
             logger.error(f"[Джарвис] Ошибка при запросе к ИИ-роутеру: {e}")
@@ -61,8 +62,9 @@ class JarvisMind:
             fix_prompt = f"Мой код упал с ошибкой:\n{output}\n\nИсправь этот код, сохранив структуру `async def run_plugin()`:\n{code}"
             
             try:
-                # ИСПРАВЛЕНО: здесь тоже .generate()
-                ai_response = await self.ai_router.generate(fix_prompt)
+                # ИСПРАВЛЕНО: Здесь тоже перешли на .complete()
+                fix_messages = [{"role": "user", "content": fix_prompt}]
+                ai_response = await self.ai_router.complete(fix_messages)
                 code = self._extract_code(ai_response)
                 success, output = await self._test_run(code)
             except Exception as e:
@@ -98,9 +100,11 @@ class JarvisMind:
         
         try:
             local_vars = {}
+            # Выполняем объявление функций
             exec(code, globals(), local_vars)
             
             if "run_plugin" in local_vars:
+                # Безопасно запускаем асинхронную функцию в текущем цикле событий
                 result = await local_vars["run_plugin"]()
                 print(f"[Вывод]: {result}")
             else:
