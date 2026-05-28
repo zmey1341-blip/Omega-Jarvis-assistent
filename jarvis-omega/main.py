@@ -1,13 +1,30 @@
 import os
 import sys
 
-# Динамическое добавление путей, чтобы Render не терял папки
+# Жесткий поиск корня проекта и всех поддиректорий
 current_dir = os.path.dirname(os.path.abspath(__file__))
 if current_dir not in sys.path:
     sys.path.insert(0, current_dir)
 
-# Теперь импорт точно сработает
-from modules.core.jarvis_mind import JarvisMind
+# Дополнительно сканируем подпапки на случай, если Render создал вложенную структуру
+for root, dirs, files in os.walk(current_dir):
+    if "modules" in dirs:
+        modules_path = os.path.join(root, "modules")
+        if root not in sys.path:
+            sys.path.insert(0, root)
+        break
+
+# Пытаемся импортировать через абсолютный и относительный пути (Failsafe импорт)
+try:
+    from modules.core.jarvis_mind import JarvisMind
+except ModuleNotFoundError:
+    try:
+        # Если папка modules оказалась в корне выполнения напрямую
+        from core.jarvis_mind import JarvisMind
+    except ModuleNotFoundError:
+        # Если структура застряла внутри вложенной директории jarvis-omega
+        sys.path.append(os.path.join(current_dir, "jarvis-omega"))
+        from modules.core.jarvis_mind import JarvisMind
 
 import asyncio
 import logging
@@ -26,12 +43,21 @@ logger = logging.getLogger("jarvis.main")
 
 
 async def main():
-    from core.brain import brain
-    from core.fail_safe_routing import FailSafeRouter
-    from modules.admin_dashboard import start_bot
-    from modules.notifier import Notifier
-    from modules.tma_server import start_server
-    from modules.worker_pool import WorkerPool
+    # Импорты остальных модулей с защитой от сбоя путей
+    try:
+        from core.brain import brain
+        from core.fail_safe_routing import FailSafeRouter
+        from modules.admin_dashboard import start_bot
+        from modules.notifier import Notifier
+        from modules.tma_server import start_server
+        from modules.worker_pool import WorkerPool
+    except ModuleNotFoundError:
+        from jarvis_omega.core.brain import brain
+        from jarvis_omega.core.fail_safe_routing import FailSafeRouter
+        from jarvis_omega.modules.admin_dashboard import start_bot
+        from jarvis_omega.modules.notifier import Notifier
+        from jarvis_omega.modules.tma_server import start_server
+        from jarvis_omega.modules.worker_pool import WorkerPool
 
     notifier = Notifier()
     logger.info("[Main] Notifier initialized (cooldown: 5 min per alert key).")
