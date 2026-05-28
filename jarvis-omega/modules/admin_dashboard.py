@@ -8,7 +8,7 @@ from aiogram.types import Message
 logger = logging.getLogger("jarvis.admin")
 
 
-def create_admin_router(brain, pool=None, notifier=None):
+def create_admin_router(brain, pool=None, notifier=None, jarvis_mind=None):
     from aiogram import Router
 
     router = Router()
@@ -25,11 +25,12 @@ def create_admin_router(brain, pool=None, notifier=None):
         await message.answer(
             "Jarvis-Omega Online\n"
             "Commands:\n"
-            "/status — system metrics\n"
-            "/pause  — pause workers\n"
-            "/resume — resume workers\n"
-            "/queue  — queue size\n"
-            "/alerts — recent alerts"
+            "/status   — system metrics\n"
+            "/develop  — auto-development mode\n"
+            "/pause    — pause workers\n"
+            "/resume   — resume workers\n"
+            "/queue    — queue size\n"
+            "/alerts   — recent alerts"
         )
 
     @router.message(Command("status"))
@@ -52,6 +53,39 @@ def create_admin_router(brain, pool=None, notifier=None):
             f"{queue_info}"
         )
         await message.answer(text)
+
+    # --- ХЭНДЛЕР САМОРАЗВИТИЯ ДЖАРВИСА ---
+    @router.message(Command("develop", "upgrade"))
+    async def cmd_develop(message: Message):
+        if not is_admin(message):
+            await message.answer("Access denied.")
+            return
+
+        if not jarvis_mind:
+            await message.answer("❌ Ошибка: Модуль JarvisMind не подключен к роутеру.")
+            return
+
+        # Получаем текст задачи (в Aiogram 3 это делается через отсечение команды)
+        task = message.text.split(maxsplit=1)[1] if len(message.text.split()) > 1 else ""
+        
+        if not task:
+            await message.answer(
+                "🤖 **Режим саморазвития Джарвиса**\n\n"
+                "Напиши мне, какую функцию или плагин разработать. Пример:\n"
+                "`/develop Сделай парсер, который запрашивает курс TON к USD и возвращает текст`"
+            )
+            return
+
+        await message.answer(
+            "🧠 *Джарвис ушел в подсознание...*\n"
+            "Анализирую архитектуру, пишу тестовый код и проверяю его безопасность. Подожди немного..."
+        )
+        
+        # Запускаем генерацию и авто-тесты из ядра мышления
+        result = await jarvis_mind.self_develop(task)
+        
+        # Отправляем полный отчет о проделанной работе в чат
+        await message.answer(result, parse_mode="Markdown")
 
     @router.message(Command("pause"))
     async def cmd_pause(message: Message):
@@ -113,7 +147,7 @@ def create_admin_router(brain, pool=None, notifier=None):
     return router
 
 
-async def start_bot(brain, pool=None, notifier=None):
+async def start_bot(brain, pool=None, notifier=None, jarvis_mind=None):
     from aiogram import Bot, Dispatcher
 
     token = os.getenv("TELEGRAM_BOT_TOKEN")
@@ -122,7 +156,9 @@ async def start_bot(brain, pool=None, notifier=None):
 
     bot = Bot(token=token)
     dp = Dispatcher()
-    dp.include_router(create_admin_router(brain, pool=pool, notifier=notifier))
+    
+    # Передаем jarvis_mind внутрь конструктора роутера
+    dp.include_router(create_admin_router(brain, pool=pool, notifier=notifier, jarvis_mind=jarvis_mind))
 
     logger.info("[Admin] Starting Telegram bot polling...")
     await dp.start_polling(bot)
