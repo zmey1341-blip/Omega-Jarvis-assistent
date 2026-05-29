@@ -2,6 +2,7 @@ import os
 import asyncio
 import logging
 import random
+import json
 from pathlib import Path
 from playwright.async_api import async_playwright
 
@@ -12,13 +13,13 @@ class AdvegoJobHunter:
         self._router = router
         self.cookie_sid = os.getenv("ADVEGO_COOKIE_SID", "")
         self.cookie_token = os.getenv("ADVEGO_COOKIE_TOKEN", "")
-        
-        # Настройки прокси (добавь эти переменные в Render, если используешь прокси)
-        # Формат: http://username:password@proxy_address:port
         self.proxy_url = os.getenv("PROXY_URL", "") 
         
         self.screenshot_dir = Path("/app/outputs") if os.path.exists("/app") else Path("./outputs")
         self.screenshot_dir.mkdir(parents=True, exist_ok=True)
+        
+        # Путь для сохранения снапшота заказов
+        self.snapshot_path = self.screenshot_dir / "snapshot.json"
 
     async def hunt_and_execute(self) -> tuple[str, float]:
         logger.info("[Advego] Автономный поиск пути пробива... Запуск Playwright.")
@@ -29,7 +30,6 @@ class AdvegoJobHunter:
         async with async_playwright() as p:
             kiwi_user_agent = "Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Mobile Safari/537.36"
             
-            # Если переменная PROXY_URL пустая, запускаемся без прокси, если заполнена — заворачиваем трафик
             launch_options = {
                 "headless": True,
                 "args": [
@@ -42,7 +42,6 @@ class AdvegoJobHunter:
             
             if self.proxy_url:
                 logger.info("[Advego] Подключение через прокси сервер...")
-                # Playwright умеет парсить строку прокси или принимать объектом
                 launch_options["proxy"] = {"server": self.proxy_url}
 
             browser = await p.chromium.launch(**launch_options)
@@ -62,7 +61,6 @@ class AdvegoJobHunter:
                 }
             )
             
-            # Накатываем куки
             await context.add_cookies([
                 {"name": "domain_sid", "value": self.cookie_sid, "domain": ".advego.com", "path": "/"},
                 {"name": "token", "value": self.cookie_token, "domain": ".advego.com", "path": "/"}
@@ -70,7 +68,6 @@ class AdvegoJobHunter:
             
             page = await context.new_page()
             
-            # Глубокий патч runtime-характеристик браузера против Cloudflare/Advego Antivirus
             await page.add_init_script("""
                 Object.defineProperty(navigator, 'webdriver', { get: () => undefined });
                 window.chrome = { runtime: {} };
@@ -83,30 +80,60 @@ class AdvegoJobHunter:
             """)
 
             try:
-                # Пробуем пробиться напрямую в обход главной страницы
                 logger.info("[Advego] Попытка прорыва в ленту заказов...")
-                response = await page.goto("https://advego.com/job/find/", wait_until="domcontentloaded", timeout=30000)
+                await page.goto("https://advego.com/job/find/", wait_until="domcontentloaded", timeout=30000)
                 
                 await asyncio.sleep(random.uniform(3.0, 5.0))
                 current_url = page.url
                 
                 if "login" in current_url:
-                    logger.warning("[Advego] Пробив не удался: Сервер Advego сбросил сессию на страницу авторизации.")
+                    logger.warning("[Advego] Пробив не удался: Страница авторизации.")
                     await browser.close()
-                    return "Сессия отклонена сервером (требуется прокси под регион Kiwi или новые куки).", 0.0
+                    return "Сессия отклонена сервером.", 0.0
 
-                # Проверка на Cloudflare
                 title = await page.title()
                 if "Cloudflare" in title or "Just a moment" in title:
                     logger.warning("[Advego] Путь заблокирован Cloudflare.")
                     await browser.close()
                     return "Блокировка Cloudflare.", 0.0
 
-                logger.info("[Advego] Ура! Прорыв успешен. Лента доступна.")
+                logger.info("[Advego] Ура! Прорыв успешен. Начинаю сбор 20 заказов...")
+                
+                # --- БЛОК СБОРА ДАННЫХ ---
+                # На Advego карточки заказов обычно имеют класс .job_task или атрибут id с префиксом task_
+                await page.wait_for_selector(".job_task, [id^='task_']", timeout=15000)
+                job_elements = await page.query_selector_all(".job_task, [id^='task_']")
+                
+                parsed_jobs = []
+                for element in job_elements[:20]: # Берем строго первые 20 штук
+                    try:
+                        # Вытаскиваем ID заказа из атрибута
+                        job_id = await element.get_attribute("id") or "unknown"
+                        
+                        # Название заказа (обычно в ссылке или в заголовке внутри карточки)
+                        title_el = await element.query_selector(".task_title, h2, a.job_title")
+                        job_title = await title_el.inner_text() if title_el else "Без названия"
+                        
+                        # Цена (ищем блоки с валютой или классы цен)
+                        price_el = await element.query_selector(".job_cost, .price, .money")
+                        job_price = await price_el.inner_text() if price_el else "0.0"
+                        
+                        parsed_jobs.append({
+                            "id": job_id.replace("task_", ""),
+                            "title": job_title.strip(),
+                            "price": job_price.strip()
+                        })
+                    except Exception as el_ex:
+                        continue
+                
+                # Сохраняем результат в файл
+                self.snapshot_path.write_text(json.dumps(parsed_jobs, ensure_ascii=False, indent=2))
+                logger.info(f"[Advego] Сбор завершен. Успешно сохранено {len(parsed_jobs)} заказов в snapshot.json.")
+                
                 await browser.close()
-                return "Успешный прорыв в личный кабинет!", 0.0
+                return f"Собрано {len(parsed_jobs)} заказов и сохранено в snapshot.json", 0.0
 
             except Exception as e:
-                logger.error(f"[Advego] Ошибка при попытке прорыва: {e}")
+                logger.error(f"[Advego] Ошибка при парсинге/прорыве: {e}")
                 await browser.close()
                 return f"Сбой метода: {e}", 0.0
