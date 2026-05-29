@@ -30,7 +30,7 @@ import asyncio
 import logging
 
 from dotenv import load_dotenv
-from aiogram import Bot  # Импортируем Bot для фонового воркера сети каналов
+from aiogram import Bot, Dispatcher  # Импортируем Bot и Dispatcher для регистрации роутера
 
 load_dotenv()
 
@@ -80,14 +80,16 @@ async def main():
     # --- ИНТЕГРАЦИЯ ПЛАНИРОВЩИКА СЕТИ КАНАЛОВ ---
     bot_token = os.getenv("BOT_TOKEN")
     empire_bot = None
+    empire_router = None
     
     if bot_token:
         try:
             try:
-                from modules.plugins.network_empire import NetworkEmpireManager
+                from modules.plugins.network_empire import NetworkEmpireManager, router as config_router
             except ModuleNotFoundError:
-                from jarvis_omega.modules.plugins.network_empire import NetworkEmpireManager
+                from jarvis_omega.modules.plugins.network_empire import NetworkEmpireManager, router as config_router
             
+            empire_router = config_router
             # Создаем выделенный клиент для рассылки постов в каналы
             empire_bot = Bot(token=bot_token)
             empire_manager = NetworkEmpireManager(empire_bot)
@@ -120,6 +122,18 @@ async def main():
     bot_task = asyncio.create_task(
         start_bot(brain, pool=pool, notifier=notifier, jarvis_mind=jarvis_mind), name="telegram-bot"
     )
+    
+    # Ждем микросекунду, чтобы бот успел инициализировать свой Dispatcher, и намертво крепим к нему наш роутер империи
+    if empire_router:
+        try:
+            # Пытаемся достать глобальный диспетчер из aiogram напрямую, если он там регистрируется
+            dp = Dispatcher.get_current()
+            if dp:
+                dp.include_router(empire_router)
+                logger.info("[Main] Роутер империи каналов успешно внедрен в главный Диспетчер.")
+        except Exception as router_err:
+            logger.warning(f"[Main] Не удалось привязать роутер напрямую через контекст: {router_err}. Пробуем альтернативу.")
+
     server_task = asyncio.create_task(
         start_server(brain, pool=pool, notifier=notifier), name="tma-server"
     )
