@@ -10,47 +10,43 @@ logger = logging.getLogger("jarvis.plugins.advego_jobs")
 class AdvegoJobHunter:
     def __init__(self, router=None):
         self._router = router
-        # Подтягиваем куки сессии из переменных окружения
         self.cookie_sid = os.getenv("ADVEGO_COOKIE_SID", "")
         self.cookie_token = os.getenv("ADVEGO_COOKIE_TOKEN", "")
+        
+        # Настройки прокси (добавь эти переменные в Render, если используешь прокси)
+        # Формат: http://username:password@proxy_address:port
+        self.proxy_url = os.getenv("PROXY_URL", "") 
+        
         self.screenshot_dir = Path("/app/outputs") if os.path.exists("/app") else Path("./outputs")
         self.screenshot_dir.mkdir(parents=True, exist_ok=True)
 
-    async def _safe_screenshot(self, page, name: str):
-        """Безопасный захват экрана без зависания на шрифтах и анимациях"""
-        screenshot_path = self.screenshot_dir / name
-        try:
-            await page.screenshot(path=str(screenshot_path), timeout=5000, animations="disabled")
-            logger.info(f"[Advego] Скриншот сохранен: {screenshot_path}")
-        except Exception as e:
-            logger.warning(f"[Advego] Не удалось сделать скриншот {name} (пропущено): {e}")
-
     async def hunt_and_execute(self) -> tuple[str, float]:
-        """Основной метод, вызываемый воркером для сканирования и выполнения задач"""
-        logger.info("[Advego] Запуск сессии сканирования через куки...")
+        logger.info("[Advego] Автономный поиск пути пробива... Запуск Playwright.")
         
         if not self.cookie_sid or not self.cookie_token:
-            logger.error("[Advego] Ошибка: Переменные ADVEGO_COOKIE_SID или ADVEGO_COOKIE_TOKEN не заданы в Render!")
-            return "Ошибка: куки авторизации Advego не настроены.", 0.0
+            return "Ошибка: Не заданы куки авторизации.", 0.0
 
         async with async_playwright() as p:
-            # Идеальный мобильный юзер-агент
             kiwi_user_agent = "Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Mobile Safari/537.36"
             
-            browser = await p.chromium.launch(
-                headless=True,
-                args=[
+            # Если переменная PROXY_URL пустая, запускаемся без прокси, если заполнена — заворачиваем трафик
+            launch_options = {
+                "headless": True,
+                "args": [
                     "--disable-blink-features=AutomationControlled",
                     "--no-sandbox",
                     "--disable-setuid-sandbox",
-                    "--disable-infobars",
-                    "--ignore-certificate-errors",
-                    "--use-fake-ui-for-media-stream",
-                    "--use-fake-device-for-media-stream"
+                    "--disable-infobars"
                 ]
-            )
+            }
             
-            # Настраиваем контекст как у реального физического телефона (плотность пикселей, язык, тач-скрин)
+            if self.proxy_url:
+                logger.info("[Advego] Подключение через прокси сервер...")
+                # Playwright умеет парсить строку прокси или принимать объектом
+                launch_options["proxy"] = {"server": self.proxy_url}
+
+            browser = await p.chromium.launch(**launch_options)
+            
             context = await browser.new_context(
                 user_agent=kiwi_user_agent,
                 viewport={"width": 390, "height": 844},
@@ -60,80 +56,57 @@ class AdvegoJobHunter:
                 locale="ru-RU",
                 timezone_id="Europe/Moscow",
                 extra_http_headers={
-                    "Accept-Language": "ru-RU,ru;q=0.9,en-US;q=0.8,en;q=0.7"
+                    "Accept-Language": "ru-RU,ru;q=0.9,en-US;q=0.8,en;q=0.7",
+                    "Sec-Ch-Ua-Mobile": "?1",
+                    "Sec-Ch-Ua-Platform": '"Android"'
                 }
             )
             
-            # Внедряем куки для домена advego.com ДО перехода на сайт
+            # Накатываем куки
             await context.add_cookies([
-                {
-                    "name": "domain_sid",
-                    "value": self.cookie_sid,
-                    "domain": ".advego.com",
-                    "path": "/",
-                    "httpOnly": True,
-                    "secure": True
-                },
-                {
-                    "name": "token",
-                    "value": self.cookie_token,
-                    "domain": ".advego.com",
-                    "path": "/",
-                    "httpOnly": False,
-                    "secure": True
-                }
+                {"name": "domain_sid", "value": self.cookie_sid, "domain": ".advego.com", "path": "/"},
+                {"name": "token", "value": self.cookie_token, "domain": ".advego.com", "path": "/"}
             ])
             
             page = await context.new_page()
             
-            # Полная маскировка объекта navigator, чтобы сайт не догадался об автоматизации
+            # Глубокий патч runtime-характеристик браузера против Cloudflare/Advego Antivirus
             await page.add_init_script("""
                 Object.defineProperty(navigator, 'webdriver', { get: () => undefined });
-                Object.defineProperty(navigator, 'maxTouchPoints', { get: () => 5 });
-                Object.defineProperty(navigator, 'languages', { get: () => ['ru-RU', 'ru'] });
+                window.chrome = { runtime: {} };
+                const originalQuery = window.navigator.permissions.query;
+                window.navigator.permissions.query = (parameters) => (
+                    parameters.name === 'notifications' ? 
+                    Promise.resolve({ state: Notification.permission }) : 
+                    originalQuery(parameters)
+                );
             """)
 
             try:
-                # 1. Пробуем перейти напрямую в ленту
-                logger.info("[Advego] Переход в ленту заказов напрямую через готовую сессию...")
-                await page.goto("https://advego.com/job/find/", wait_until="commit", timeout=30000)
-                await asyncio.sleep(random.uniform(4.0, 6.0))
-
-                current_html = await page.content()
+                # Пробуем пробиться напрямую в обход главной страницы
+                logger.info("[Advego] Попытка прорыва в ленту заказов...")
+                response = await page.goto("https://advego.com/job/find/", wait_until="domcontentloaded", timeout=30000)
+                
+                await asyncio.sleep(random.uniform(3.0, 5.0))
                 current_url = page.url
-
-                # Проверяем, куда нас закинуло
-                if "login" in current_url or "login" in current_html.lower():
-                    logger.warning("[Advego] Сессия по кукам отклонена, сайт требует авторизацию.")
-                    await self._safe_screenshot(page, "cookie_auth_failed.png")
-                    await browser.close()
-                    return "Ошибка: Сброс сессии. Требуется обновить куки из Kiwi.", 0.0
-
-                if "Cloudflare" in await page.title() or "Just a moment" in await page.title():
-                    logger.warning("[Advego] Обнаружен Cloudflare.")
-                    await self._safe_screenshot(page, "cloudflare_on_cookies.png")
-                    await browser.close()
-                    return "Заблокировано Cloudflare при входе.", 0.0
-
-                # 2. Фиксируем успешный вход
-                logger.info("[Advego] Успешный вход в личный кабинет выполнен!")
-                await self._safe_screenshot(page, "advego_jobs_feed_success.png")
                 
-                # Доход строго в рублях
-                revenue_rub = 0.0 
-                
-                logger.info("[Advego] Сканирование ленты успешно завершено.")
+                if "login" in current_url:
+                    logger.warning("[Advego] Пробив не удался: Сервер Advego сбросил сессию на страницу авторизации.")
+                    await browser.close()
+                    return "Сессия отклонена сервером (требуется прокси под регион Kiwi или новые куки).", 0.0
+
+                # Проверка на Cloudflare
+                title = await page.title()
+                if "Cloudflare" in title or "Just a moment" in title:
+                    logger.warning("[Advego] Путь заблокирован Cloudflare.")
+                    await browser.close()
+                    return "Блокировка Cloudflare.", 0.0
+
+                logger.info("[Advego] Ура! Прорыв успешен. Лента доступна.")
                 await browser.close()
-                return "Сканирование ленты Advego по активной сессии завершено. Новых заказов нет.", revenue_rub
+                return "Успешный прорыв в личный кабинет!", 0.0
 
             except Exception as e:
-                logger.error(f"[Advego] Критический сбой во время работы по кукам: {e}")
-                await self._safe_screenshot(page, "advego_cookie_fatal_error.png")
+                logger.error(f"[Advego] Ошибка при попытке прорыва: {e}")
                 await browser.close()
-                return f"Критическая ошибка сессии: {e}", 0.0
-
-async def run_plugin() -> str:
-    """Интерфейсная функция для тестирования плагина ядром JarvisMind"""
-    hunter = AdvegoJobHunter()
-    result, revenue_rub = await hunter.hunt_and_execute()
-    return f"Статус: {result} | Доход: {revenue_rub} руб."
+                return f"Сбой метода: {e}", 0.0
