@@ -30,6 +30,7 @@ import asyncio
 import logging
 
 from dotenv import load_dotenv
+from aiogram import Bot  # Импортируем Bot для фонового воркера сети каналов
 
 load_dotenv()
 
@@ -76,6 +77,45 @@ async def main():
     await pool.start()
     logger.info("[Main] WorkerPool started with 3 workers.")
 
+    # --- ИНТЕГРАЦИЯ ПЛАНИРОВЩИКА СЕТИ КАНАЛОВ ---
+    bot_token = os.getenv("BOT_TOKEN")
+    empire_bot = None
+    
+    if bot_token:
+        try:
+            try:
+                from modules.plugins.network_empire import NetworkEmpireManager
+            except ModuleNotFoundError:
+                from jarvis_omega.modules.plugins.network_empire import NetworkEmpireManager
+            
+            # Создаем выделенный клиент для рассылки постов в каналы
+            empire_bot = Bot(token=bot_token)
+            empire_manager = NetworkEmpireManager(empire_bot)
+            
+            async def auto_post_scheduler():
+                logger.info("[Main-Scheduler] Фоновый таймер сети каналов успешно запущен.")
+                # Даем системе 3 минуты (180 сек), чтобы поднять основные процессы, базы и пулы
+                await asyncio.sleep(180)
+                while True:
+                    try:
+                        logger.info("[Main-Scheduler] Время публикации. Будим парсер...")
+                        await empire_manager.auto_post_cycle()
+                    except Exception as ex:
+                        logger.error(f"[Main-Scheduler Ошибка] Сбой в цикле автопостинга: {ex}")
+                    
+                    # Интервал — раз в 3 часа
+                    await asyncio.sleep(3 * 3600)
+            
+            # Запускаем бесконечный цикл планировщика параллельной фоновой задачей
+            asyncio.create_task(auto_post_scheduler(), name="network-empire-scheduler")
+            logger.info("[Main] Задача планировщика автопостинга добавлена в асинхронный пул.")
+            
+        except Exception as plugin_err:
+            logger.error(f"[Main] Не удалось запустить планировщик каналов: {plugin_err}")
+    else:
+        logger.warning("[Main] Переменная BOT_TOKEN отсутствует. Сеть каналов не будет обновляться.")
+    # --------------------------------------------
+
     # Передаем созданный jarvis_mind внутрь таски телеграм-бота
     bot_task = asyncio.create_task(
         start_bot(brain, pool=pool, notifier=notifier, jarvis_mind=jarvis_mind), name="telegram-bot"
@@ -95,6 +135,9 @@ async def main():
         raise
     finally:
         await pool.stop()
+        if empire_bot:
+            await empire_bot.session.close()
+            logger.info("[Main] Фоновая сессия Bot для каналов успешно закрыта.")
         logger.info("[Main] WorkerPool stopped on exit.")
 
 
