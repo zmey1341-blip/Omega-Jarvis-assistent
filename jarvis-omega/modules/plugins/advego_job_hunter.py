@@ -39,6 +39,7 @@ class AdvegoJobHunter:
                     "--disable-blink-features=AutomationControlled",
                     "--no-sandbox",
                     "--disable-setuid-sandbox",
+                    "--disable-dev-shm-usage",
                     "--disable-infobars"
                 ]
             }
@@ -104,14 +105,14 @@ class AdvegoJobHunter:
 
                 logger.info("[Advego] Ура! Прорыв успешен. Начинаю сбор элементов...")
                 
-                # --- БЛОК СБОРА ДАННЫХ (БЫСТРЫЙ И БЕЗОПАСНЫЙ) ---
-                # Собираем все ссылки, содержащие переходы на заказы
-                job_links = await page.query_selector_all("a[href*='/job/']")
+                # --- БЛОК СБОРА ДАННЫХ (МАКСИМАЛЬНЫЙ ОХВАТ) ---
+                # Собираем СБСОЛЮТНО ВСЕ ссылки на странице для анализа
+                all_links = await page.query_selector_all("a")
                 
                 parsed_jobs = []
-                seen_ids = set()
+                seen_titles = set()
                 
-                for el in job_links:
+                for el in all_links:
                     if len(parsed_jobs) >= 20:
                         break
                     try:
@@ -119,38 +120,34 @@ class AdvegoJobHunter:
                         text = await el.inner_text()
                         text = text.strip()
                         
-                        if not text or len(text) < 10: 
-                            continue # Пропускаем пустые ссылки или короткие кнопки типа "Подробнее"
+                        # Если в ссылке есть "job" и текст длиннее 15 символов — это 99% название или описание заказа
+                        if "job" in href.lower() and text and len(text) > 15:
+                            clean_title = " ".join(text.split())
                             
-                        # Выдергиваем ID из ссылки типа /job/view/123456/ или из параметров
-                        parts = [p for p in href.split("/") if p]
-                        job_id = "unknown"
-                        for i, part in enumerate(parts):
-                            if part == "view" and i + 1 < len(parts):
-                                job_id = parts[i + 1]
-                                break
-                        
-                        if job_id in seen_ids:
-                            continue
+                            if clean_title in seen_titles:
+                                continue
+                                
+                            seen_titles.add(clean_title)
                             
-                        seen_ids.add(job_id)
-                        
-                        # Косметически урезаем заголовок, если он слишком длинный
-                        clean_title = " ".join(text.split())
-                        if len(clean_title) > 80:
-                            clean_title = clean_title[:77] + "..."
-                            
-                        parsed_jobs.append({
-                            "id": job_id,
-                            "title": clean_title,
-                            "price": "Парсинг цены отключен"
-                        })
+                            # Парсим ID из ссылки, если он там есть цифрами
+                            job_id = "".join([c for c in href if c.isdigit()])
+                            if not job_id:
+                                job_id = str(random.randint(100000, 999999))
+                                
+                            if len(clean_title) > 90:
+                                clean_title = clean_title[:87] + "..."
+                                
+                            parsed_jobs.append({
+                                "id": job_id,
+                                "title": clean_title,
+                                "price": "Доступно в ЛК"
+                            })
                     except Exception:
                         continue
                 
                 # Сохраняем результат в файл snapshot.json
                 self.snapshot_path.write_text(json.dumps(parsed_jobs, ensure_ascii=False, indent=2))
-                logger.info(f"[Advego] Сбор завершен. Найдено и сохранено {len(parsed_jobs)} уникальных заказов.")
+                logger.info(f"[Advego] Сбор завершен. Успешно сохранено {len(parsed_jobs)} заказов в snapshot.json.")
                 
                 await browser.close()
                 return f"Успешный прорыв! Собрано элементов: {len(parsed_jobs)}", 0.0
