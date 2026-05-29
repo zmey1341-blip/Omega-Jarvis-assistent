@@ -55,6 +55,21 @@ class WorkerPool:
             task.cancel()
         await asyncio.gather(*self._worker_tasks, return_exceptions=True)
 
+    # --- Новые методы управления паузой и возобновлением ---
+    async def pause(self) -> None:
+        """ СТАВИТ ВОРКЕРЫ НА ПАУЗУ """
+        self._running_event.clear()
+        logger.warning("[Workers] Pool has been paused.")
+
+    async def resume(self) -> None:
+        """ СНИМАЕТ ВОРКЕРЫ С ПАУЗЫ (то, что вызывала админка) """
+        self._running_event.set()
+        logger.info("[Workers] Pool has been resumed.")
+
+    def is_paused(self) -> bool:
+        """ ПРОВЕРЯЕТ СТАТУС ПАУЗЫ """
+        return not self._running_event.is_set()
+
     async def add_task(self, prompt: str, task_type: TaskType = TaskType.LLM_CHAT, metadata: dict | None = None) -> None:
         task = Task(prompt=prompt, task_type=task_type, metadata=metadata or {})
         await self._queue.put(task)
@@ -64,11 +79,12 @@ class WorkerPool:
         await asyncio.sleep(15)
         while not self._shutdown:
             try:
-                # Постановка задачи на Advego раз в 30 минут
-                await self.add_task(
-                    prompt="Сканирование ленты Advego на наличие доступных заказов.",
-                    task_type=TaskType.HUNT_JOBS
-                )
+                # Если пул на паузе — не забиваем очередь тасками сканирования
+                if not self.is_paused():
+                    await self.add_task(
+                        prompt="Сканирование ленты Advego на наличие доступных заказов.",
+                        task_type=TaskType.HUNT_JOBS
+                    )
                 await asyncio.sleep(1800)
             except asyncio.CancelledError:
                 break
