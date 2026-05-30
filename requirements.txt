@@ -4,4 +4,4 @@ aiogram
 python-dotenv
 httpx
 playwright==1.44.0
-
+groq
