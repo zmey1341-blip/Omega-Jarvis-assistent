@@ -35,8 +35,8 @@ RUN pip install --no-cache-dir --upgrade pip \
 # Скачиваем только бинарник Chromium (зависимости мы уже поставили вручную выше)
 RUN playwright install chromium
 
-# Копируем исходный код проекта
-COPY jarvis-omega/ .
+# Копируем всё содержимое папки jarvis-omega в корень контейнера
+COPY jarvis-omega/ /app/
 
 # Добавляем корневую папку в пути импортов
 ENV PYTHONPATH=/app
