@@ -77,53 +77,53 @@ async def main():
     await pool.start()
     logger.info("[Main] WorkerPool started with 3 workers.")
 
-    # --- ИНТЕГРАЦИЯ ПЛАНИРОВЩИКА СЕТИ КАНАЛОВ ---
+    # Инициализируем ЕДИНСТВЕННЫЙ экземпляр Bot для всего приложения
     bot_token = os.getenv("BOT_TOKEN") or os.getenv("TELEGRAM_BOT_TOKEN")
-    empire_bot = None
-    empire_router = None
+    if not bot_token:
+        raise ValueError("Критическая ошибка: Переменная BOT_TOKEN или TELEGRAM_BOT_TOKEN не задана в окружении.")
     
-    if bot_token:
+    shared_bot = Bot(token=bot_token)
+    empire_router = None
+
+    # --- ИНТЕГРАЦИЯ ПЛАНИРОВЩИКА СЕТИ КАНАЛОВ ---
+    try:
         try:
+            from modules.plugins.network_empire import NetworkEmpireManager, router as config_router
+        except ModuleNotFoundError:
             try:
-                from modules.plugins.network_empire import NetworkEmpireManager, router as config_router
+                from jarvis_omega.modules.plugins.network_empire import NetworkEmpireManager, router as config_router
             except ModuleNotFoundError:
+                from plugins.network_empire import NetworkEmpireManager, router as config_router
+        
+        empire_router = config_router
+        # Передаем нашего единого shared_bot в менеджер империи
+        empire_manager = NetworkEmpireManager(shared_bot)
+        
+        async def auto_post_scheduler():
+            logger.info("[Main-Scheduler] Фоновый таймер сети каналов успешно запущен.")
+            # Даем системе 3 минуты (180 сек) на прогрев
+            await asyncio.sleep(180)
+            while True:
                 try:
-                    from jarvis_omega.modules.plugins.network_empire import NetworkEmpireManager, router as config_router
-                except ModuleNotFoundError:
-                    from plugins.network_empire import NetworkEmpireManager, router as config_router
-            
-            empire_router = config_router
-            # Создаем выделенный клиент для рассылки постов в каналы
-            empire_bot = Bot(token=bot_token)
-            empire_manager = NetworkEmpireManager(empire_bot)
-            
-            async def auto_post_scheduler():
-                logger.info("[Main-Scheduler] Фоновый таймер сети каналов успешно запущен.")
-                # Даем системе 3 минуты (180 сек), чтобы поднять основные процессы
-                await asyncio.sleep(180)
-                while True:
-                    try:
-                        logger.info("[Main-Scheduler] Время публикации. Будем парсер...")
-                        await empire_manager.auto_post_cycle()
-                    except Exception as ex:
-                        logger.error(f"[Main-Scheduler Ошибка] Сбой в цикле автопостинга: {ex}")
-                    
-                    # Интервал — раз в 3 часа
-                    await asyncio.sleep(3 * 3600)
-            
-            # Запускаем бесконечный цикл планировщика параллельной фоновой задачей
-            asyncio.create_task(auto_post_scheduler(), name="network-empire-scheduler")
-            logger.info("[Main] Задача планировщика автопостинга добавлена в асинхронный пул.")
-            
-        except Exception as plugin_err:
-            logger.error(f"[Main] Не удалось запустить планировщик каналов: {plugin_err}")
-    else:
-        logger.warning("[Main] Переменная BOT_TOKEN/TELEGRAM_BOT_TOKEN отсутствует. Сеть каналов не будет обновляться.")
+                    logger.info("[Main-Scheduler] Время публикации. Будим парсер...")
+                    await empire_manager.auto_post_cycle()
+                except Exception as ex:
+                    logger.error(f"[Main-Scheduler Ошибка] Сбой в цикле автопостинга: {ex}")
+                
+                # Интервал — раз в 3 часа
+                await asyncio.sleep(3 * 3600)
+        
+        asyncio.create_task(auto_post_scheduler(), name="network-empire-scheduler")
+        logger.info("[Main] Задача планировщика автопостинга добавлена в асинхронный пул.")
+        
+    except Exception as plugin_err:
+        logger.error(f"[Main] Не удалось запустить планировщик каналов: {plugin_err}")
     # --------------------------------------------
 
-    # Передаем созданный jarvis_mind и роутер империи внутрь единой таски телеграм-бота
+    # Передаем shared_bot и роутер внутрь таски телеграм-бота
     bot_task = asyncio.create_task(
-        start_bot(brain, pool=pool, notifier=notifier, jarvis_mind=jarvis_mind, empire_router=empire_router), name="telegram-bot"
+        start_bot(brain, pool=pool, notifier=notifier, jarvis_mind=jarvis_mind, empire_router=empire_router, bot_instance=shared_bot), 
+        name="telegram-bot"
     )
     server_task = asyncio.create_task(
         start_server(brain, pool=pool, notifier=notifier), name="tma-server"
@@ -140,9 +140,8 @@ async def main():
         raise
     finally:
         await pool.stop()
-        if empire_bot:
-            await empire_bot.session.close()
-            logger.info("[Main] Фоновая сессия Bot для каналов успешно закрыта.")
+        await shared_bot.session.close()
+        logger.info("[Main] Единая сессия Bot успешно закрыта при выходе.")
         logger.info("[Main] WorkerPool stopped on exit.")
 
 
