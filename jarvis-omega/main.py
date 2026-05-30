@@ -65,22 +65,39 @@ async def main():
 
     # --- ИЗОЛИРОВАННЫЙ ПЛАНИРОВЩИК ИМПЕРИИ КАНАЛОВ ---
     empire_router = None
-    # Для фонового постинга берем BOT_TOKEN, если он есть. Если его нет — берем TELEGRAM_BOT_TOKEN
     target_token = os.getenv("BOT_TOKEN") or os.getenv("TELEGRAM_BOT_TOKEN")
     
     if target_token:
         try:
+            # Сквозной тотальный перебор путей для импорта менеджера и роутера империи
             try:
                 from modules.plugins.network_empire import NetworkEmpireManager, router as config_router
+                logger.info("[Main-Import] Успешный импорт из modules.plugins.network_empire")
             except ModuleNotFoundError:
                 try:
-                    from jarvis_omega.modules.plugins.network_empire import NetworkEmpireManager, router as config_router
-                except ModuleNotFoundError:
                     from plugins.network_empire import NetworkEmpireManager, router as config_router
+                    logger.info("[Main-Import] Успешный импорт из plugins.network_empire")
+                except ModuleNotFoundError:
+                    try:
+                        from jarvis_omega.modules.plugins.network_empire import NetworkEmpireManager, router as config_router
+                        logger.info("[Main-Import] Успешный импорт из jarvis_omega.modules.plugins.network_empire")
+                    except ModuleNotFoundError:
+                        # Самый жесткий вариант: принудительно пихаем директорию плагинов в sys.path
+                        import sys
+                        possible_paths = [
+                            os.path.join(current_dir, "modules", "plugins"),
+                            os.path.join(current_dir, "jarvis-omega", "modules", "plugins"),
+                            os.path.join(current_dir, "plugins")
+                        ]
+                        for p in possible_paths:
+                            if os.path.exists(p):
+                                sys.path.append(p)
+                        
+                        from network_empire import NetworkEmpireManager, router as config_router
+                        logger.info("[Main-Import] Успешный импорт напрямую через аварийный sys.path")
             
             empire_router = config_router
             
-            # Локальная функция-планировщик, которая сама создаст и закроет сессию бота внутри себя
             async def auto_post_scheduler(token):
                 from aiogram import Bot
                 logger.info("[Main-Scheduler] Фоновый таймер сети каналов ожидает 3 минуты перед стартом...")
@@ -89,10 +106,9 @@ async def main():
                 
                 while True:
                     try:
-                        # Создаем бота только на момент выполнения транзакции постинга
                         async with Bot(token=token) as shadow_bot:
                             empire_manager = NetworkEmpireManager(shadow_bot)
-                            logger.info("[Main-Scheduler] Время публикации. Будим парсер...")
+                            logger.info("[Main-Scheduler] Время публикации. Будем парсер...")
                             await empire_manager.auto_post_cycle()
                     except Exception as ex:
                         logger.error(f"[Main-Scheduler Ошибка] Сбой в цикле автопостинга: {ex}")
