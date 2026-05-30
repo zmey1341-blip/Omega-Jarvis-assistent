@@ -14,7 +14,7 @@ logger = logging.getLogger("jarvis.network_empire")
 router = Router()
 
 DB_PATH = "network_empire.db"
-ADMIN_ID = int(os.getenv("ADMIN_ID", "0"))  # Твой Telegram ID из переменных окружения Render
+ADMIN_ID = int(os.getenv("ADMIN_ID", "0"))  
 GROQ_API_KEY = os.getenv("GROQ_API_KEY", "")
 
 # --- ИНИЦИАЛИЗАЦИЯ БАЗЫ ДАННЫХ ---
@@ -42,26 +42,41 @@ def init_db():
 
 init_db()
 
+# --- ФИЛЬТР ПРЕОБРАЗОВАНИЯ ID КАНАЛОВ ---
+def get_channel_id(env_name: str):
+    """Преобразует строковые ID из .env в целые числа, необходимые для Telegram API"""
+    val = os.getenv(env_name)
+    if not val:
+        return None
+    val = val.strip()
+    # Если это отрицательный ID приватного канала или просто число
+    if val.startswith("-") or val.isdigit():
+        try:
+            return int(val)
+        except ValueError:
+            return val
+    return val  # Возвращаем как строку, если это юзернейм вида @channelname
+
 # --- КОНФИГУРАЦИЯ НАПРАВЛЕНИЙ ---
 CHANNELS = {
     "garage": {
-        "id": os.getenv("CHAN_GARAGE"),
+        "id": get_channel_id("CHAN_GARAGE"),
         "url": "https://www.pepper.ru/groups/tools",
         "prompt": "Ты — суровый, но опытный автомеханик из гаражей. Расскажи мужикам про скидку на этот инструмент кратко, используя жесткий гаражный сленг. Напиши, почему эта вещь пригодится в гараже или дома для девчат, чтобы починить что угодно. Пиши живо, без занудства."
     },
     "fishing": {
-        "id": os.getenv("CHAN_FISHING"),
+        "id": get_channel_id("CHAN_FISHING"),
         "url": "https://www.pepper.ru/groups/fishing",
         "prompt": "Ты — бывалый рыбак, который всю жизнь провел на Волге и Ахтубе. Опиши скидку на этот рыболовный товар (снасть, катушка, шнур). Добавь короткий, едкий рыбацкий лайфхак по применению этой приблуды на природе во время джига или фидера."
     },
     "youth": {
-        "id": os.getenv("CHAN_YOUTH"),
+        "id": get_channel_id("CHAN_YOUTH"),
         "url": "https://www.pepper.ru/groups/electronics",
         "prompt": "Ты — дерзкий трендсеттер и охотник за хайпом. Опиши этот гаджет или секретную личную штучку (необычные флешки, флаконы, приватные девайсы). Пиши для молодежи от 14 до 27 лет. Сделай текст кликбейтных, интригующим, делай упор на полезность и скрытность от лишних глаз."
     },
     "android_mods": {
-        "id": os.getenv("CHAN_ANDROID"),
-        "url": "https://www.pepper.ru/groups/computers",  # Как временный донор, пока парсятся скидки на софт
+        "id": get_channel_id("CHAN_ANDROID"),
+        "url": "https://www.pepper.ru/groups/computers",  
         "prompt": "Ты — хакер старой школы. Оформи пост про взломанное премиум-приложение или топовый софт на Android. Четко, по пунктам распиши фичи взлома: Premium разблокирован, вырезана реклама, открыты все уровни. Напиши сочно и авторитетно."
     }
 }
@@ -95,28 +110,41 @@ class NetworkEmpireManager:
         return original_url
 
     async def auto_post_cycle(self):
-        """Регулярный цикл: по 1 посту в каждый канал"""
+        """Регулярный цикл: по 1 посту в каждый канал с обходом защиты"""
         logger.info("[Empire] Старт фонового парсинга скидок...")
         async with async_playwright() as p:
             browser = await p.chromium.launch(
                 headless=True, 
-                args=["--no-sandbox", "--disable-setuid-sandbox", "--disable-dev-shm-usage"]
+                args=[
+                    "--no-sandbox", 
+                    "--disable-setuid-sandbox", 
+                    "--disable-dev-shm-usage",
+                    "--disable-blink-features=AutomationControlled" # Архитектурно снимаем детект бота
+                ]
             )
-            context = await browser.new_context(user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64)")
+            # Прикидываемся реальным ПК
+            context = await browser.new_context(
+                user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
+                viewport={"width": 1280, "height": 800},
+                locale="ru-RU"
+            )
             page = await context.new_page()
 
             for chan_key, config in CHANNELS.items():
                 if not config["id"]:
+                    logger.warning(f"[Empire] Пропуск {chan_key}: ID канала отсутствует.")
                     continue
                 try:
-                    await page.goto(config["url"], wait_until="domcontentloaded", timeout=30000)
+                    logger.info(f"[Empire] Идем на донора {chan_key}: {config['url']}")
+                    # Ждем именно 'networkidle' - полная загрузка JS
+                    await page.goto(config["url"], wait_until="networkidle", timeout=45000)
                     await asyncio.sleep(4)
 
                     items = await page.query_selector_all("article.thread")
                     if not items:
+                        logger.error(f"[Empire ERROR] Элементы на странице {chan_key} не найдены. Возможна капча.")
                         continue
 
-                    # Берем рандомный из первой пятерки лучших, чтобы каналы не дублировали друг друга
                     item = random.choice(items[:5])
                     title_el = await item.query_selector(".thread-title a")
                     price_el = await item.query_selector(".thread-price")
@@ -128,7 +156,6 @@ class NetworkEmpireManager:
                         full_link = f"https://www.pepper.ru{link}" if not link.startswith("http") else link
                         prod_id = "".join([c for c in link if c.isdigit()]) or str(random.randint(10000, 99999))
 
-                        # Запись в БД для умного бота-ответчика
                         conn = sqlite3.connect(DB_PATH)
                         cur = conn.cursor()
                         cur.execute("INSERT OR REPLACE INTO products VALUES (?, ?, ?, ?, ?, ?)",
@@ -136,7 +163,6 @@ class NetworkEmpireManager:
                         conn.commit()
                         conn.close()
 
-                        # Генерация через Groq
                         ai_text = await self.get_ai_review(raw_title, raw_price, config["prompt"])
                         money_link = await self.make_deeplink(full_link)
 
@@ -146,11 +172,12 @@ class NetworkEmpireManager:
                             f"🆔 Код товара для вопросов ИИ: `{prod_id}`"
                         )
 
-                        bot_username = (await self.bot.get_me()).username
+                        bot_info = await self.bot.get_me()
+                        bot_username = bot_info.username
+                        
                         if chan_key == "android_mods":
-                            # Канал андроид модов закрываем партнеркой из ТГ
                             keyboard = InlineKeyboardMarkup(inline_keyboard=[
-                                [InlineKeyboardButton(text="📥 Скачать Premium бесплатно", url="https://t.me/GiftsCenterBot/app?startapp=ref_u6g2m1")] # Твоя рефка со скрина
+                                [InlineKeyboardButton(text="📥 Скачать Premium бесплатно", url="https://t.me/GiftsCenterBot/app?startapp=ref_u6g2m1")]
                             ])
                         else:
                             keyboard = InlineKeyboardMarkup(inline_keyboard=[
@@ -159,22 +186,32 @@ class NetworkEmpireManager:
                             ])
 
                         await self.bot.send_message(chat_id=config["id"], text=post_text, reply_markup=keyboard, parse_mode="Markdown")
-                        logger.info(f"[Empire] Успешный автопост в {chan_key}")
+                        logger.info(f"[Empire] УСПЕШНЫЙ АВТОПОСТ В {chan_key}")
                         await asyncio.sleep(10)
 
                 except Exception as e:
-                    logger.error(f"[Empire ERROR] Сбой в канале {chan_key}: {e}")
+                    # Архитектурно логируем полный трейсбэк
+                    logger.error(f"[Empire ERROR] Сбой в канале {chan_key}: {e}", exc_info=True)
             
             await browser.close()
 
     async def initial_bulk_fill(self, target_count: int = 50):
-        """Первоначальное жесткое наполнение каналов по 50 постов"""
+        """Первоначальное жесткое наполнение каналов"""
         async with async_playwright() as p:
             browser = await p.chromium.launch(
                 headless=True, 
-                args=["--no-sandbox", "--disable-setuid-sandbox", "--disable-dev-shm-usage"]
+                args=[
+                    "--no-sandbox", 
+                    "--disable-setuid-sandbox", 
+                    "--disable-dev-shm-usage",
+                    "--disable-blink-features=AutomationControlled"
+                ]
             )
-            context = await browser.new_context(user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64)")
+            context = await browser.new_context(
+                user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
+                viewport={"width": 1280, "height": 800},
+                locale="ru-RU"
+            )
             page = await context.new_page()
 
             for chan_key, config in CHANNELS.items():
@@ -182,7 +219,7 @@ class NetworkEmpireManager:
                     continue
                 try:
                     logger.info(f"[МАСС-ПОСТИНГ] Сбор данных для {chan_key}...")
-                    await page.goto(config["url"], wait_until="domcontentloaded", timeout=30000)
+                    await page.goto(config["url"], wait_until="networkidle", timeout=45000)
                     await asyncio.sleep(3)
 
                     # Прокрутка вниз для забивки пула товаров
@@ -214,7 +251,6 @@ class NetworkEmpireManager:
                             conn.commit()
                             conn.close()
 
-                            # Шаблон быстрого масс-поста без выжигания лимитов Groq на старте
                             post_text = (
                                 f"📢 **{raw_title.strip()}**\n\n"
                                 f"🔥 Ловите проверенную скидку. Качество отличное, отзывы в порядке. Отличный вариант для заначки!\n\n"
@@ -222,23 +258,26 @@ class NetworkEmpireManager:
                                 f"🆔 Код товара для ИИ: `{prod_id}`"
                             )
 
-                            bot_username = (await self.bot.get_me()).username
+                            bot_info = await self.bot.get_me()
+                            bot_username = bot_info.username
+                            
                             keyboard = InlineKeyboardMarkup(inline_keyboard=[
-                                [InlineKeyboardButton(text="🛒 Купить на Маркете", url=full_link)],
+                                [InlineKeyboardButton(text="🛒 Купить", url=full_link)],
                                 [InlineKeyboardButton(text="🤖 Спросить ИИ", url=f"https://t.me/{bot_username}?start=ask_{prod_id}")]
                             ])
 
                             try:
                                 await self.bot.send_message(chat_id=config["id"], text=post_text, reply_markup=keyboard, parse_mode="Markdown")
                                 posted += 1
-                                await asyncio.sleep(3.5)  # Защита от спам-фильтра Telegram
+                                logger.info(f"[МАСС-ПОСТИНГ] Пост {posted}/{target_count} отправлен в {chan_key}")
+                                await asyncio.sleep(3.5)  # Жесткая защита от FloodWait
                             except Exception as tg_err:
-                                logger.error(f"Лимит ТГ: {tg_err}")
+                                logger.error(f"Лимит ТГ (FloodWait/Error): {tg_err}")
                                 await asyncio.sleep(15)
 
                     logger.info(f"[МАСС-ПОСТИНГ] Канал {chan_key} успешно заполнен на {posted} постов.")
                 except Exception as e:
-                    logger.error(f"[МАСС-ПОСТИНГ ERROR] Сбой на канале {chan_key}: {e}")
+                    logger.error(f"[МАСС-ПОСТИНГ ERROR] Сбой на канале {chan_key}: {e}", exc_info=True)
 
             await browser.close()
 
@@ -267,13 +306,13 @@ async def start_handler(message: Message):
 
 @router.message(Command("subscribe"))
 async def buy_premium_access(message: Message, bot: Bot):
-    prices = [LabeledPrice(label="VIP доступ ко всей сети (30 дней)", amount=150)]  # 150 звезд Telegram
+    prices = [LabeledPrice(label="VIP доступ ко всей сети (30 дней)", amount=150)]  
     await bot.send_invoice(
         chat_id=message.chat.id,
         title="VIP Допуск к Сетке Каналов",
         description="Полноценный доступ к хакнутым прилам Android без спонсоров и скрытым молодежным лотам.",
         payload="vip_access_30days",
-        currency="XTR",  # Токен Звезд Telegram
+        currency="XTR",  
         prices=prices,
         start_parameter="vip_pay"
     )
@@ -297,7 +336,6 @@ async def payment_success(message: Message):
 
 @router.message(F.text & ~F.text.startswith("/"))
 async def strict_product_qa(message: Message):
-    """Жесткий ИИ-фильтр: отвечает только по параметрам товара, пресекая флуд"""
     user_query = message.text.lower()
     
     conn = sqlite3.connect(DB_PATH)
@@ -312,7 +350,6 @@ async def strict_product_qa(message: Message):
 
     prod_title, prod_price, prod_details = prod
     
-    # Промпт-рубеж
     system_guard_prompt = (
         f"Ты — торговый робот-консультант. Твоя цель — отвечать на вопросы покупателя СТРОГО на основе этих параметров:\n"
         f"Товар: {prod_title}\nЦена: {prod_price}\nИнфо: {prod_details}\n\n"
