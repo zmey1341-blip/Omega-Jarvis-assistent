@@ -30,7 +30,7 @@ import asyncio
 import logging
 
 from dotenv import load_dotenv
-from aiogram import Bot, Dispatcher  # Импортируем Bot и Dispatcher для регистрации роутера
+from aiogram import Bot
 
 load_dotenv()
 
@@ -100,7 +100,7 @@ async def main():
                 await asyncio.sleep(180)
                 while True:
                     try:
-                        logger.info("[Main-Scheduler] Время публикации. Будим парсер...")
+                        logger.info("[Main-Scheduler] Время публикации. Будем парсер...")
                         await empire_manager.auto_post_cycle()
                     except Exception as ex:
                         logger.error(f"[Main-Scheduler Ошибка] Сбой в цикле автопостинга: {ex}")
@@ -118,22 +118,10 @@ async def main():
         logger.warning("[Main] Переменная BOT_TOKEN отсутствует. Сеть каналов не будет обновляться.")
     # --------------------------------------------
 
-    # Передаем созданный jarvis_mind внутрь таски телеграм-бота
+    # Передаем созданный jarvis_mind и роутер империи внутрь таски телеграм-бота
     bot_task = asyncio.create_task(
-        start_bot(brain, pool=pool, notifier=notifier, jarvis_mind=jarvis_mind), name="telegram-bot"
+        start_bot(brain, pool=pool, notifier=notifier, jarvis_mind=jarvis_mind, empire_router=empire_router), name="telegram-bot"
     )
-    
-    # Ждем микросекунду, чтобы бот успел инициализировать свой Dispatcher, и намертво крепим к нему наш роутер империи
-    if empire_router:
-        try:
-            # Пытаемся достать глобальный диспетчер из aiogram напрямую, если он там регистрируется
-            dp = Dispatcher.get_current()
-            if dp:
-                dp.include_router(empire_router)
-                logger.info("[Main] Роутер империи каналов успешно внедрен в главный Диспетчер.")
-        except Exception as router_err:
-            logger.warning(f"[Main] Не удалось привязать роутер напрямую через контекст: {router_err}. Пробуем альтернативу.")
-
     server_task = asyncio.create_task(
         start_server(brain, pool=pool, notifier=notifier), name="tma-server"
     )
