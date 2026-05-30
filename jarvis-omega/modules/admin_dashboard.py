@@ -128,8 +128,6 @@ def create_admin_router(brain, pool=None, notifier=None, jarvis_mind=None):
             result = await jarvis_mind.self_develop(task)
             
             # --- Защита от кривой разметки Телеграма ---
-            # Переводим вывод на HTML. Если внутри ответа есть блоки кода, 
-            # оборачиваем их красиво, а остальной текст безопасно экранируем.
             if "```python" in result:
                 parts = result.split("```python")
                 intro = html.escape(parts[0].strip())
@@ -139,14 +137,12 @@ def create_admin_router(brain, pool=None, notifier=None, jarvis_mind=None):
                 
                 formatted_text = f"{intro}\n\n<pre><code class='language-python'>{code_block}</code></pre>\n\n{outro}"
             else:
-                # Если блоков кода нет (например, вернулась ошибка теста) — просто безопасно экранируем весь текст
                 formatted_text = html.escape(result)
 
             try:
                 await message.answer(formatted_text, parse_mode="HTML")
             except Exception as parse_err:
                 logger.warning(f"[Admin] HTML parse failed, falling back to raw text: {parse_err}")
-                # Если Телеграм всё равно ругается на HTML — отправляем как голый текст, без паники
                 await message.answer(f"🤖 Отчет (сырой текст):\n\n{result}", parse_mode=None)
 
         except Exception as e:
@@ -218,7 +214,7 @@ def create_admin_router(brain, pool=None, notifier=None, jarvis_mind=None):
     return router
 
 
-async def start_bot(brain, pool=None, notifier=None, jarvis_mind=None):
+async def start_bot(brain, pool=None, notifier=None, jarvis_mind=None, empire_router=None):
     from aiogram import Bot, Dispatcher
 
     token = os.getenv("TELEGRAM_BOT_TOKEN")
@@ -228,7 +224,16 @@ async def start_bot(brain, pool=None, notifier=None, jarvis_mind=None):
     bot = Bot(token=token)
     dp = Dispatcher()
     
+    # Подключаем роутер админки
     dp.include_router(create_admin_router(brain, pool=pool, notifier=notifier, jarvis_mind=jarvis_mind))
+    logger.info("[Admin] Роутер админки успешно подключен.")
+
+    # Если передан роутер империи каналов — жестко вшиваем его в диспетчер
+    if empire_router:
+        dp.include_router(empire_router)
+        logger.info("[Admin] Роутер империи сетевых каналов ЖЕСТКО внедрен в Диспетчер.")
+    else:
+        logger.warning("[Admin] Роутер империи каналов отсутствует в параметрах запуска.")
 
     logger.info("[Admin] Starting Telegram bot polling...")
     await dp.start_polling(bot)
