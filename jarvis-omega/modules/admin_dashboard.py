@@ -190,25 +190,32 @@ def create_admin_router(brain, pool=None, notifier=None, jarvis_mind=None):
     return router
 
 
-async def start_bot(brain, pool=None, notifier=None, jarvis_mind=None, empire_router=None, bot_instance=None):
-    from aiogram import Dispatcher
+async def start_bot(brain, pool=None, notifier=None, jarvis_mind=None, empire_router=None):
+    from aiogram import Bot, Dispatcher
     from aiogram.fsm.storage.memory import MemoryStorage
 
+    # Оригинальная чистая логика админки
+    token = os.getenv("TELEGRAM_BOT_TOKEN")
+    if not token:
+        raise ValueError("TELEGRAM_BOT_TOKEN не задан в переменных окружения.")
+
+    bot = Bot(token=token)
     dp = Dispatcher(storage=MemoryStorage())
     
     # Подключаем роутер админки
     dp.include_router(create_admin_router(brain, pool=pool, notifier=notifier, jarvis_mind=jarvis_mind))
     logger.info("[Admin] Роутер админки успешно подключен.")
 
-    # Подключаем роутер империи
+    # Если передан роутер империи — регистрируем его в основном диспетчере
     if empire_router:
         dp.include_router(empire_router)
         logger.info("[Admin] Роутер империи сетевых каналов ЖЕСТКО внедрен в Диспетчер.")
 
     logger.info("[Admin] Starting Telegram bot polling...")
     try:
-        # Сбрасываем старые апдейты перед запуском
-        await bot_instance.delete_webhook(drop_pending_updates=True)
-        await dp.start_polling(bot_instance)
+        await bot.delete_webhook(drop_pending_updates=True)
+        await dp.start_polling(bot)
     except Exception as e:
         logger.exception(f"[Admin] Критическая ошибка при поллинге бота: {e}")
+    finally:
+        await bot.session.close()
